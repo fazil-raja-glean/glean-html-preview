@@ -108,7 +108,26 @@ PUBLISH_ACCESS_AUD = "<access-application-aud-tag>"
 
 This protects external API requests. The MCP Worker does not need the Cloudflare Access client id or client secret because it reaches the API Worker through the `PUBLISH_API` service binding.
 
-### 5. Generate production tokens
+### 5. Configure Cloudflare Access for MCP OAuth
+
+Create a separate Cloudflare Access application for `${MCP_BASE_URL}/oauth/authorize`.
+
+- Protect only `/oauth/authorize`.
+- Do not protect `/mcp`, `/oauth/token`, or the OAuth metadata endpoints.
+- Allow only the Glean users or groups that should be able to publish previews.
+
+Update `wrangler.toml`:
+
+```toml
+MCP_OAUTH_REQUIRE_USER_AUTH = "true"
+MCP_OAUTH_ACCESS_TEAM_DOMAIN = "https://<team>.cloudflareaccess.com"
+MCP_OAUTH_ACCESS_AUD = "<mcp-oauth-access-application-aud-tag>"
+MCP_OAUTH_ALLOWED_EMAIL_DOMAIN = "glean.com"
+```
+
+When Codex, Claude Code, or Glean starts the authorization-code flow, the browser signs in through Cloudflare Access. The Worker verifies the Access JWT, binds the verified user email into the OAuth code and access token, and records that email as the preview publisher.
+
+### 6. Generate production tokens
 
 Generate the Worker secrets locally:
 
@@ -143,7 +162,7 @@ printf '%s' "$MCP_OAUTH_CLIENT_SECRET" | npx wrangler secret put MCP_OAUTH_CLIEN
 printf '%s' "$MCP_OAUTH_TOKEN_SECRET" | npx wrangler secret put MCP_OAUTH_TOKEN_SECRET --env mcp
 ```
 
-### 6. Apply the schema
+### 7. Apply the schema
 
 ```sh
 npm run d1:migrate:prod
@@ -151,7 +170,7 @@ npm run d1:migrate:prod
 
 The schema is idempotent.
 
-### 7. Deploy
+### 8. Deploy
 
 Run a dry run first:
 
@@ -173,7 +192,7 @@ Deploy:
 npm run deploy
 ```
 
-### 8. Smoke test the live MCP endpoint
+### 9. Smoke test the live MCP endpoint
 
 ```sh
 export MCP="https://your-mcp-worker.example.com"
@@ -200,7 +219,7 @@ Expected:
 - missing MCP bearer token returns `401` with a `WWW-Authenticate` OAuth challenge
 - wrong OAuth client credentials return `401`
 
-Get an OAuth access token:
+Get a machine OAuth access token for handshake and tool discovery:
 
 ```sh
 ACCESS_TOKEN="$(
@@ -214,7 +233,7 @@ ACCESS_TOKEN="$(
 )"
 ```
 
-Optional authorization-code smoke test, matching Glean's OAuth admin UI:
+Authorization-code login smoke test, matching Codex, Claude Code, and Glean user OAuth:
 
 ```sh
 open "$(node -e 'const [base, clientId, redirectUri, scope] = process.argv.slice(1); const url = new URL("/oauth/authorize", base); url.searchParams.set("response_type", "code"); url.searchParams.set("client_id", clientId); url.searchParams.set("redirect_uri", redirectUri); url.searchParams.set("scope", scope); console.log(url.toString())' "$MCP" "$MCP_OAUTH_CLIENT_ID" "$MCP_OAUTH_REDIRECT_URI" "$MCP_OAUTH_SCOPES")"
@@ -239,7 +258,7 @@ Expected:
 - `initialize` returns `serverInfo.name = "html-sharing"`
 - `tools/list` returns `publish_html_preview`
 
-Publish through MCP:
+Publish through MCP with a user-bound authorization-code token. `client_credentials` tokens can initialize and list tools, but publish calls fail because they are not tied to a Glean user:
 
 ```sh
 curl -sS "$MCP/mcp" \
@@ -274,7 +293,7 @@ Expected response includes:
 }
 ```
 
-### 9. Create the Glean MCP server
+### 10. Create the Glean MCP server
 
 In Glean Admin Console:
 
@@ -310,13 +329,16 @@ Authorization: Bearer <oauth-access-token>
 
 Glean should not know `PUBLISH_API_TOKEN`, `PUBLISH_INTERNAL_SERVICE_TOKEN`, `MCP_OAUTH_TOKEN_SECRET`, `COOKIE_SIGNING_SECRET`, or `PASSWORD_PEPPER`.
 
-### 10. Connect Codex and Claude Code
+If the tool is enabled for chat users, each publisher should complete the authorization-code flow through Glean SSO. Machine-only `client_credentials` tokens are accepted for handshake and discovery, but the `publish_html_preview` tool rejects tokens that do not contain a verified user email.
+
+### 11. Connect Codex and Claude Code
 
 Codex and Claude Code should use public OAuth clients with S256 PKCE. Configure the MCP Worker with:
 
 ```toml
 MCP_OAUTH_PUBLIC_CLIENT_IDS = "codex-html-sharing-mcp,claude-code-html-sharing-mcp"
 MCP_OAUTH_ALLOWED_REDIRECT_URIS = "https://your-glean-callback.example.com/oauth/callback,http://127.0.0.1:5555/callback,http://localhost:5555/callback"
+MCP_OAUTH_REQUIRE_USER_AUTH = "true"
 ```
 
 For Codex, use a fixed callback URL so the Worker can allow-list it:
@@ -368,6 +390,9 @@ PUBLISH_API_TOKEN=$LOCAL_PUBLISH_API_TOKEN
 MCP_OAUTH_CLIENT_ID=local-html-sharing-mcp
 MCP_OAUTH_PUBLIC_CLIENT_IDS=codex-html-sharing-mcp,claude-code-html-sharing-mcp
 MCP_OAUTH_ALLOWED_REDIRECT_URIS=http://localhost:8787/oauth/local-callback,http://127.0.0.1:5555/callback,http://localhost:5555/callback
+MCP_OAUTH_REQUIRE_USER_AUTH=true
+MCP_OAUTH_LOCAL_BYPASS_EMAIL=html-sharing@example.com
+MCP_OAUTH_ALLOWED_EMAIL_DOMAIN=example.com
 MCP_OAUTH_SCOPES=mcp:tools
 MCP_OAUTH_CLIENT_SECRET=$LOCAL_MCP_OAUTH_CLIENT_SECRET
 MCP_OAUTH_TOKEN_SECRET=$LOCAL_MCP_OAUTH_TOKEN_SECRET
@@ -375,6 +400,7 @@ PUBLISH_ADMIN_LOCAL_BYPASS_SECRET=$LOCAL_ADMIN_BYPASS_SECRET
 COOKIE_SIGNING_SECRET=$LOCAL_COOKIE_SIGNING_SECRET
 PASSWORD_PEPPER=$LOCAL_PASSWORD_PEPPER
 TRUSTED_PUBLISHER_EMAIL=html-sharing@example.com
+PUBLISHER_EMAIL_DOMAIN=example.com
 WORKER_ROLE=combined
 EOF
 ```

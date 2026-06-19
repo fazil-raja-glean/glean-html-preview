@@ -16,6 +16,7 @@ interface AccessTokenPayload {
   iat: number;
   exp: number;
   jti: string;
+  email?: string;
 }
 
 interface AuthorizationCodePayload {
@@ -26,6 +27,7 @@ interface AuthorizationCodePayload {
   iat: number;
   exp: number;
   jti: string;
+  email?: string;
   codeChallenge?: string;
   codeChallengeMethod?: "plain" | "S256";
 }
@@ -33,8 +35,12 @@ interface AuthorizationCodePayload {
 export type CodeChallengeMethod = "plain" | "S256";
 
 export type AuthorizationCodeGrantResult =
-  | { valid: true; scope: string }
+  | { valid: true; scope: string; actorEmail?: string }
   | { valid: false; error: string; description: string };
+
+export type AccessTokenVerificationResult =
+  | { valid: true; actorEmail?: string; clientId: string }
+  | { valid: false; message: string };
 
 const AUTHORIZATION_CODE_TTL_SECONDS = 5 * 60;
 
@@ -44,6 +50,7 @@ export async function issueAuthorizationCode(
     clientId: string;
     redirectUri: string;
     scope: string;
+    actorEmail?: string;
     codeChallenge?: string;
     codeChallengeMethod?: CodeChallengeMethod;
   },
@@ -58,6 +65,7 @@ export async function issueAuthorizationCode(
       iat: now,
       exp: now + AUTHORIZATION_CODE_TTL_SECONDS,
       jti: randomBase64Url(16),
+      ...(input.actorEmail ? { email: input.actorEmail } : {}),
       ...(input.codeChallenge
         ? { codeChallenge: input.codeChallenge, codeChallengeMethod: input.codeChallengeMethod ?? "plain" }
         : {}),
@@ -99,20 +107,31 @@ export async function exchangeAuthorizationCodeGrant(
     return { valid: false, error: "invalid_grant", description: "Authorization code verifier is invalid" };
   }
 
-  return { valid: true, scope: payload.scope };
+  return {
+    valid: true,
+    scope: payload.scope,
+    ...(payload.email ? { actorEmail: payload.email } : {}),
+  };
 }
 
-export async function issueAccessToken(config: McpOAuthConfig, clientId: string, scope: string): Promise<string> {
+export async function issueAccessToken(
+  config: McpOAuthConfig,
+  clientId: string,
+  scope: string,
+  actorEmail?: string,
+): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   return signJwt(
     {
       iss: config.issuer,
       sub: clientId,
+      client_id: clientId,
       aud: config.resource,
       scope,
       iat: now,
       exp: now + config.accessTokenTtlSeconds,
       jti: randomBase64Url(16),
+      ...(actorEmail ? { email: actorEmail } : {}),
     },
     config.tokenSecret,
   );
@@ -121,7 +140,7 @@ export async function issueAccessToken(config: McpOAuthConfig, clientId: string,
 export async function verifyAccessToken(
   token: string,
   config: McpOAuthTokenConfig,
-): Promise<{ valid: true } | { valid: false; message: string }> {
+): Promise<AccessTokenVerificationResult> {
   const payload = await verifySignedJwt(token, config.tokenSecret, parseAccessTokenPayload);
   if (!payload) {
     return { valid: false, message: "Invalid OAuth bearer token" };
@@ -148,7 +167,11 @@ export async function verifyAccessToken(
     return { valid: false, message: "OAuth bearer token scope is invalid" };
   }
 
-  return { valid: true };
+  return {
+    valid: true,
+    clientId: payload.sub,
+    ...(payload.email ? { actorEmail: payload.email } : {}),
+  };
 }
 
 export function parseCodeChallengeMethod(value: string | null): CodeChallengeMethod | null {
@@ -184,6 +207,10 @@ function parseAccessTokenPayload(value: Record<string, unknown>): AccessTokenPay
     return null;
   }
 
+  if (value.email !== undefined && typeof value.email !== "string") {
+    return null;
+  }
+
   return {
     iss: value.iss,
     sub: value.sub,
@@ -192,6 +219,7 @@ function parseAccessTokenPayload(value: Record<string, unknown>): AccessTokenPay
     iat: value.iat,
     exp: value.exp,
     jti: value.jti,
+    ...(value.email ? { email: value.email } : {}),
   };
 }
 
@@ -207,6 +235,10 @@ function parseAuthorizationCodePayload(value: Record<string, unknown>): Authoriz
     !Number.isInteger(value.iat) ||
     !Number.isInteger(value.exp)
   ) {
+    return null;
+  }
+
+  if (value.email !== undefined && typeof value.email !== "string") {
     return null;
   }
 
@@ -230,6 +262,7 @@ function parseAuthorizationCodePayload(value: Record<string, unknown>): Authoriz
     iat: value.iat,
     exp: value.exp,
     jti: value.jti,
+    ...(value.email ? { email: value.email } : {}),
     ...(value.codeChallenge ? { codeChallenge: value.codeChallenge } : {}),
     ...(value.codeChallengeMethod ? { codeChallengeMethod: value.codeChallengeMethod } : {}),
   };

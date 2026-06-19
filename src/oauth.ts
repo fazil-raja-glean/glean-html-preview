@@ -1,3 +1,4 @@
+import { requireCloudflareAccessUserEmail, type CloudflareAccessJwtConfig } from "./admin-auth";
 import { HttpError, jsonResponse } from "./http";
 import {
   configuredOAuthClient,
@@ -22,8 +23,14 @@ import {
   parseCodeChallengeMethod,
   verifyAccessToken,
 } from "./oauth-token";
+import { isLocalDevelopmentRequest } from "./origin-policy";
 
 export type { McpOAuthEnv } from "./oauth-config";
+
+export interface McpOAuthAccessContext {
+  actorEmail?: string;
+  clientId: string;
+}
 
 export function handleOAuthAuthorizationServerMetadata(request: Request, env: McpOAuthEnv): Response {
   const config = mcpOAuthPublicConfig(request, env);
@@ -98,6 +105,7 @@ export async function handleOAuthAuthorizeRequest(request: Request, env: McpOAut
     clientId,
     redirectUri,
     scope,
+    actorEmail: await authorizeActorEmail(request, env),
     ...(codeChallenge ? { codeChallenge, codeChallengeMethod: codeChallengeMethod ?? "plain" } : {}),
   });
 
@@ -146,14 +154,14 @@ export async function handleOAuthTokenRequest(request: Request, env: McpOAuthEnv
   }
 
   return jsonResponse({
-    access_token: await issueAccessToken(config, client.clientId, scope),
+    access_token: await issueAccessToken(config, client.clientId, scope, codeResult?.actorEmail),
     token_type: "Bearer",
     expires_in: config.accessTokenTtlSeconds,
     scope,
   });
 }
 
-export async function requireMcpOAuthAccessToken(request: Request, env: McpOAuthEnv): Promise<void> {
+export async function requireMcpOAuthAccessToken(request: Request, env: McpOAuthEnv): Promise<McpOAuthAccessContext> {
   const config = mcpOAuthTokenConfig(request, env);
   const authorization = request.headers.get("Authorization");
   const prefix = "Bearer ";
@@ -170,6 +178,11 @@ export async function requireMcpOAuthAccessToken(request: Request, env: McpOAuth
       headers: mcpBearerChallenge(config, "invalid_token"),
     });
   }
+
+  return {
+    clientId: result.clientId,
+    ...(result.actorEmail ? { actorEmail: result.actorEmail } : {}),
+  };
 }
 
 async function readFormBody(request: Request): Promise<URLSearchParams> {
@@ -195,6 +208,60 @@ function mcpBearerChallenge(config: McpOAuthPublicConfig, error?: string): Heade
   return {
     "WWW-Authenticate": `Bearer ${params.join(", ")}`,
   };
+}
+
+async function authorizeActorEmail(request: Request, env: McpOAuthEnv): Promise<string | undefined> {
+  if (!booleanEnv(env.MCP_OAUTH_REQUIRE_USER_AUTH)) {
+    return undefined;
+  }
+
+  const requestUrl = new URL(request.url);
+  if (isLocalDevelopmentRequest(request, requestUrl) && env.MCP_OAUTH_LOCAL_BYPASS_EMAIL) {
+    return normalizedAllowedEmail(env.MCP_OAUTH_LOCAL_BYPASS_EMAIL, env);
+  }
+
+  const email = await requireCloudflareAccessUserEmail(request, oauthAccessConfig(env));
+  return normalizedAllowedEmail(email, env);
+}
+
+function oauthAccessConfig(env: McpOAuthEnv): CloudflareAccessJwtConfig {
+  const teamDomain = env.MCP_OAUTH_ACCESS_TEAM_DOMAIN ?? env.PUBLISH_ACCESS_TEAM_DOMAIN;
+  const audience = env.MCP_OAUTH_ACCESS_AUD ?? env.PUBLISH_ACCESS_AUD;
+  if (!teamDomain || !audience) {
+    throw new HttpError(
+      500,
+      "missing_mcp_oauth_user_auth",
+      "MCP OAuth user authentication is not configured",
+    );
+  }
+
+  return {
+    teamDomain,
+    audience,
+  };
+}
+
+function normalizedAllowedEmail(value: string, env: McpOAuthEnv): string {
+  const email = value.trim().toLowerCase();
+  if (!email.includes("@")) {
+    throw new HttpError(403, "invalid_access_email", "Cloudflare Access user email is invalid");
+  }
+
+  const domain = (env.MCP_OAUTH_ALLOWED_EMAIL_DOMAIN ?? env.PUBLISHER_EMAIL_DOMAIN)?.trim().toLowerCase();
+  if (!domain) {
+    throw new HttpError(500, "missing_mcp_oauth_email_domain", "MCP OAuth allowed email domain is not configured");
+  }
+
+  const suffix = `@${domain}`;
+  if (!email.endsWith(suffix) || email.length <= suffix.length) {
+    throw new HttpError(403, "access_email_forbidden", `Cloudflare Access user must be a ${suffix} user`);
+  }
+
+  return email;
+}
+
+function booleanEnv(value: string | undefined): boolean {
+  return value?.trim().toLowerCase() === "true";
 }
 
 function oauthErrorResponse(

@@ -1,5 +1,5 @@
 import { HttpError, jsonResponse } from "./http";
-import { type McpOAuthEnv, requireMcpOAuthAccessToken } from "./oauth";
+import { type McpOAuthAccessContext, type McpOAuthEnv, requireMcpOAuthAccessToken } from "./oauth";
 
 interface McpEnv extends McpOAuthEnv {
   PUBLISH_API?: Fetcher;
@@ -37,10 +37,11 @@ interface PublishToolArguments {
 const JSON_RPC_VERSION = "2.0";
 const MCP_PROTOCOL_VERSION = "2025-03-26";
 const PUBLISH_TOOL_NAME = "publish_html_preview";
+export const INTERNAL_PUBLISH_ACTOR_EMAIL_HEADER = "X-Publish-Actor-Email";
 export const INTERNAL_PUBLISH_SERVICE_TOKEN_HEADER = "X-Publish-Internal-Service-Token";
 
 export async function handleMcpRequest(request: Request, env: McpEnv): Promise<Response> {
-  await requireMcpOAuthAccessToken(request, env);
+  const accessContext = await requireMcpOAuthAccessToken(request, env);
 
   const payload = await readJsonRpcPayload(request);
   const inputs = Array.isArray(payload) ? payload : [payload];
@@ -50,7 +51,7 @@ export async function handleMcpRequest(request: Request, env: McpEnv): Promise<R
 
   const responses = [];
   for (const input of inputs) {
-    const response = await handleJsonRpcMessage(input, env);
+    const response = await handleJsonRpcMessage(input, env, accessContext);
     if (response) {
       responses.push(response);
     }
@@ -71,7 +72,11 @@ async function readJsonRpcPayload(request: Request): Promise<unknown> {
   }
 }
 
-async function handleJsonRpcMessage(input: unknown, env: McpEnv): Promise<Record<string, unknown> | null> {
+async function handleJsonRpcMessage(
+  input: unknown,
+  env: McpEnv,
+  accessContext: McpOAuthAccessContext,
+): Promise<Record<string, unknown> | null> {
   if (!isRecord(input)) {
     return jsonRpcError(null, -32600, "Invalid Request");
   }
@@ -87,7 +92,7 @@ async function handleJsonRpcMessage(input: unknown, env: McpEnv): Promise<Record
   }
 
   if (request.id === undefined) {
-    await handleJsonRpcNotification(request, env);
+    await handleJsonRpcNotification(request, env, accessContext);
     return null;
   }
 
@@ -101,7 +106,7 @@ async function handleJsonRpcMessage(input: unknown, env: McpEnv): Promise<Record
       case "tools/list":
         return jsonRpcResult(responseId, { tools: [publishHtmlPreviewTool()] });
       case "tools/call":
-        return await handleToolsCall(responseId, request.params, env);
+        return await handleToolsCall(responseId, request.params, env, accessContext);
       default:
         return jsonRpcError(responseId, -32601, "Method not found");
     }
@@ -110,13 +115,17 @@ async function handleJsonRpcMessage(input: unknown, env: McpEnv): Promise<Record
   }
 }
 
-async function handleJsonRpcNotification(request: JsonRpcRequest, env: McpEnv): Promise<void> {
+async function handleJsonRpcNotification(
+  request: JsonRpcRequest,
+  env: McpEnv,
+  accessContext: McpOAuthAccessContext,
+): Promise<void> {
   if (request.method === "notifications/initialized" || request.method === "notifications/cancelled") {
     return;
   }
 
   if (request.method === "tools/call") {
-    await handleToolsCall(null, request.params, env);
+    await handleToolsCall(null, request.params, env, accessContext);
   }
 }
 
@@ -180,6 +189,7 @@ async function handleToolsCall(
   id: JsonRpcId,
   params: unknown,
   env: McpEnv,
+  accessContext: McpOAuthAccessContext,
 ): Promise<Record<string, unknown>> {
   const call = parseToolCall(params);
   if (call.name !== PUBLISH_TOOL_NAME) {
@@ -187,7 +197,7 @@ async function handleToolsCall(
   }
 
   const args = parsePublishToolArguments(call.arguments);
-  return jsonRpcResult(id, await publishHtmlPreview(args, env));
+  return jsonRpcResult(id, await publishHtmlPreview(args, env, accessContext));
 }
 
 function parseToolCall(params: unknown): { name: string; arguments: unknown } {
@@ -248,11 +258,19 @@ function parsePublishToolArguments(value: unknown): PublishToolArguments {
   };
 }
 
-async function publishHtmlPreview(args: PublishToolArguments, env: McpEnv): Promise<ToolResult> {
+async function publishHtmlPreview(
+  args: PublishToolArguments,
+  env: McpEnv,
+  accessContext: McpOAuthAccessContext,
+): Promise<ToolResult> {
+  if (!accessContext.actorEmail) {
+    throw new HttpError(401, "missing_mcp_actor", "OAuth token is not bound to an authenticated Glean user");
+  }
+
   const apiUrl = publishApiUrl(env);
   const request = new Request(apiUrl, {
     method: "POST",
-    headers: publishApiHeaders(env),
+    headers: publishApiHeaders(env, accessContext),
     body: JSON.stringify(args),
   });
   const publishApi = requirePublishApiBinding(env);
@@ -293,12 +311,13 @@ function publishApiUrl(env: McpEnv): string {
   return new URL("/v1/html-previews", base).toString();
 }
 
-function publishApiHeaders(env: McpEnv): Headers {
+function publishApiHeaders(env: McpEnv, accessContext: McpOAuthAccessContext): Headers {
   const publishToken = requireConfiguredSecret(env.PUBLISH_API_TOKEN, "PUBLISH_API_TOKEN");
   const headers = new Headers({
     Authorization: `Bearer ${publishToken}`,
     "Content-Type": "application/json",
   });
+  headers.set(INTERNAL_PUBLISH_ACTOR_EMAIL_HEADER, accessContext.actorEmail ?? "");
   headers.set(
     INTERNAL_PUBLISH_SERVICE_TOKEN_HEADER,
     requireConfiguredSecret(env.PUBLISH_INTERNAL_SERVICE_TOKEN, "PUBLISH_INTERNAL_SERVICE_TOKEN"),

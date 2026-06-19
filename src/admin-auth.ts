@@ -42,6 +42,10 @@ export interface CloudflareAccessJwtConfig {
   audience: string;
 }
 
+export interface CloudflareAccessIdentity {
+  email: string | null;
+}
+
 export interface CloudflareAccessJwtVerifyOptions {
   fetcher?: AccessCertsFetcher;
   now?: number;
@@ -57,10 +61,10 @@ export async function requirePublishAdminAccess(
     fetcher?: AccessCertsFetcher;
     now?: number;
   },
-): Promise<void> {
+): Promise<CloudflareAccessIdentity> {
   if (options.isLocalDevelopment && env.PUBLISH_ADMIN_LOCAL_BYPASS_SECRET) {
     requireLocalPublishAdminSecret(request, env.PUBLISH_ADMIN_LOCAL_BYPASS_SECRET);
-    return;
+    return { email: null };
   }
 
   const config = cloudflareAccessConfig(env);
@@ -77,13 +81,37 @@ export async function requirePublishAdminAccess(
     throw new HttpError(401, "missing_access_jwt", "Missing Cloudflare Access JWT");
   }
 
-  const valid = await verifyCloudflareAccessJwt(token, config, {
+  const identity = await verifyCloudflareAccessJwtIdentity(token, config, {
     fetcher: options.fetcher,
     now: options.now,
   });
-  if (!valid) {
+  if (!identity) {
     throw new HttpError(403, "invalid_access_jwt", "Invalid Cloudflare Access JWT");
   }
+
+  return identity;
+}
+
+export async function requireCloudflareAccessUserEmail(
+  request: Request,
+  config: CloudflareAccessJwtConfig,
+  options: CloudflareAccessJwtVerifyOptions = {},
+): Promise<string> {
+  const token = request.headers.get(CLOUDFLARE_ACCESS_JWT_HEADER);
+  if (!token) {
+    throw new HttpError(401, "missing_access_jwt", "Missing Cloudflare Access JWT");
+  }
+
+  const identity = await verifyCloudflareAccessJwtIdentity(token, config, options);
+  if (!identity) {
+    throw new HttpError(403, "invalid_access_jwt", "Invalid Cloudflare Access JWT");
+  }
+
+  if (!identity.email) {
+    throw new HttpError(403, "missing_access_email", "Cloudflare Access JWT is missing a user email");
+  }
+
+  return identity.email;
 }
 
 export async function verifyCloudflareAccessJwt(
@@ -91,19 +119,27 @@ export async function verifyCloudflareAccessJwt(
   config: CloudflareAccessJwtConfig,
   options: CloudflareAccessJwtVerifyOptions = {},
 ): Promise<boolean> {
+  return (await verifyCloudflareAccessJwtIdentity(token, config, options)) !== null;
+}
+
+export async function verifyCloudflareAccessJwtIdentity(
+  token: string,
+  config: CloudflareAccessJwtConfig,
+  options: CloudflareAccessJwtVerifyOptions = {},
+): Promise<CloudflareAccessIdentity | null> {
   const decoded = decodeJwt(token);
   if (!decoded) {
-    return false;
+    return null;
   }
 
   const expectedTeamDomain = normalizeAccessTeamDomain(config.teamDomain);
   if (!expectedTeamDomain || !tokenClaimsAreValid(decoded, expectedTeamDomain, config.audience, options.now)) {
-    return false;
+    return null;
   }
 
   const kid = decoded.header.kid;
   if (decoded.header.alg !== "RS256" || typeof kid !== "string") {
-    return false;
+    return null;
   }
 
   const fetcher = options.fetcher ?? fetch;
@@ -115,10 +151,17 @@ export async function verifyCloudflareAccessJwt(
   }
 
   if (!jwk) {
-    return false;
+    return null;
   }
 
-  return verifyRs256Signature(decoded, jwk);
+  const verified = await verifyRs256Signature(decoded, jwk);
+  if (!verified) {
+    return null;
+  }
+
+  return {
+    email: normalizedEmailClaim(decoded.payload.email),
+  };
 }
 
 function requireLocalPublishAdminSecret(request: Request, expectedSecret: string): void {
@@ -223,6 +266,15 @@ function audienceIncludes(value: unknown, expectedAudience: string): boolean {
   }
 
   return Array.isArray(value) && value.some((item) => item === expectedAudience);
+}
+
+function normalizedEmailClaim(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const email = value.trim().toLowerCase();
+  return email.includes("@") ? email : null;
 }
 
 async function accessKeysForTeamDomain(

@@ -2,7 +2,7 @@ import { constantTimeEqual, randomBase64Url } from "./encoding";
 import { requirePublishAdminAccess } from "./admin-auth";
 import { enforceEdgeRateLimit } from "./edge-rate-limit";
 import { HttpError, errorResponse, jsonResponse, methodNotAllowed, readJsonObject, requireBearerToken } from "./http";
-import { INTERNAL_PUBLISH_SERVICE_TOKEN_HEADER, handleMcpRequest } from "./mcp";
+import { INTERNAL_PUBLISH_ACTOR_EMAIL_HEADER, INTERNAL_PUBLISH_SERVICE_TOKEN_HEADER, handleMcpRequest } from "./mcp";
 import type { McpOAuthEnv } from "./oauth-config";
 import { handleOAuthRoute } from "./oauth-router";
 import { enforceConfiguredRouteOrigin, isLocalDevelopmentRequest, publicBaseUrl } from "./origin-policy";
@@ -64,6 +64,10 @@ interface PublishInput {
   publisherEmail: string;
   expiresAt: string;
   sourceUrl: string | null;
+}
+
+interface PublishAdminIdentity {
+  actorEmail: string | null;
 }
 
 interface RotatePasswordInput {
@@ -155,8 +159,8 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
         return edgeRateLimit;
       }
 
-      await requirePublishAdminRequest(request, env, url);
-      return publishPreview(request, env, url);
+      const identity = await requirePublishAdminRequest(request, env, url);
+      return publishPreview(request, env, url, identity.actorEmail);
     }
     case "mcp": {
       if (request.method !== "POST") {
@@ -175,20 +179,22 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
     }
     case "oauth":
       return handleOAuthRoute(request, env, route.action);
-    case "unpublish":
+    case "unpublish": {
       if (request.method !== "POST") {
         return methodNotAllowed();
       }
 
-      await requirePublishAdminRequest(request, env, url);
-      return unpublishPreview(request, env, route.slug);
-    case "rotatePassword":
+      const identity = await requirePublishAdminRequest(request, env, url);
+      return unpublishPreview(request, env, route.slug, identity.actorEmail);
+    }
+    case "rotatePassword": {
       if (request.method !== "POST") {
         return methodNotAllowed();
       }
 
-      await requirePublishAdminRequest(request, env, url);
-      return rotatePassword(request, env, route.slug);
+      const identity = await requirePublishAdminRequest(request, env, url);
+      return rotatePassword(request, env, route.slug, identity.actorEmail);
+    }
     case "access": {
       if (request.method !== "POST") {
         return methodNotAllowed();
@@ -225,15 +231,20 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
   );
 }
 
-async function requirePublishAdminRequest(request: Request, env: Env, url: URL): Promise<void> {
+async function requirePublishAdminRequest(request: Request, env: Env, url: URL): Promise<PublishAdminIdentity> {
   requireBearerToken(request, env.PUBLISH_API_TOKEN);
   if (hasValidInternalPublishServiceToken(request, env)) {
-    return;
+    return {
+      actorEmail: internalPublishActorEmail(request, env),
+    };
   }
 
-  await requirePublishAdminAccess(request, env, {
+  const accessIdentity = await requirePublishAdminAccess(request, env, {
     isLocalDevelopment: isLocalDevelopmentRequest(request, url),
   });
+  return {
+    actorEmail: accessIdentity.email,
+  };
 }
 
 function hasValidInternalPublishServiceToken(
@@ -256,8 +267,18 @@ function hasValidInternalPublishServiceToken(
   return true;
 }
 
-async function publishPreview(request: Request, env: Env, url: URL): Promise<Response> {
-  const input = parsePublishInput(await readJsonObject(request), env);
+function internalPublishActorEmail(request: Request, env: Env): string | null {
+  const actorEmail = request.headers.get(INTERNAL_PUBLISH_ACTOR_EMAIL_HEADER);
+  return actorEmail ? resolveApiActorEmail(env, actorEmail) : null;
+}
+
+async function publishPreview(
+  request: Request,
+  env: Env,
+  url: URL,
+  actorEmail: string | null,
+): Promise<Response> {
+  const input = parsePublishInput(await readJsonObject(request), env, actorEmail);
   const slug = createSlug();
   const objectKey = `previews/${slug}/index.html`;
   const now = new Date().toISOString();
@@ -329,10 +350,15 @@ async function publishPreview(request: Request, env: Env, url: URL): Promise<Res
   );
 }
 
-async function unpublishPreview(request: Request, env: Env, slug: string): Promise<Response> {
+async function unpublishPreview(
+  request: Request,
+  env: Env,
+  slug: string,
+  actorEmail: string | null,
+): Promise<Response> {
   const existing = await getPreview(env, slug);
   const input = parseUnpublishInput(await readJsonObject(request));
-  const actorEmail = resolveApiActorEmail(env);
+  const resolvedActorEmail = resolveApiActorEmail(env, actorEmail ?? undefined);
   const deletedAt = new Date().toISOString();
 
   await env.PREVIEW_DB.prepare("UPDATE previews SET deleted_at = ? WHERE slug = ? AND deleted_at IS NULL")
@@ -346,7 +372,7 @@ async function unpublishPreview(request: Request, env: Env, slug: string): Promi
   await recordAudit(env, {
     slug,
     eventType: "unpublished",
-    actorEmail,
+    actorEmail: resolvedActorEmail,
     request,
     details: { deleteObject: input.deleteObject },
   });
@@ -354,10 +380,15 @@ async function unpublishPreview(request: Request, env: Env, slug: string): Promi
   return jsonResponse({ slug, status: "unpublished", deletedAt });
 }
 
-async function rotatePassword(request: Request, env: Env, slug: string): Promise<Response> {
+async function rotatePassword(
+  request: Request,
+  env: Env,
+  slug: string,
+  actorEmail: string | null,
+): Promise<Response> {
   await getPreview(env, slug);
   const input = parseRotatePasswordInput(await readJsonObject(request));
-  const actorEmail = resolveApiActorEmail(env);
+  const resolvedActorEmail = resolveApiActorEmail(env, actorEmail ?? undefined);
   const password = await hashPassword(input.password, env.PASSWORD_PEPPER);
 
   await env.PREVIEW_DB.prepare(
@@ -374,7 +405,7 @@ async function rotatePassword(request: Request, env: Env, slug: string): Promise
   await recordAudit(env, {
     slug,
     eventType: "password_rotated",
-    actorEmail,
+    actorEmail: resolvedActorEmail,
     request,
     details: null,
   });
@@ -668,11 +699,11 @@ function accessRateLimitBlockFromRow(row: AccessRateLimitRow | null, now: number
   };
 }
 
-function parsePublishInput(body: Record<string, unknown>, env: Env): PublishInput {
+function parsePublishInput(body: Record<string, unknown>, env: Env, actorEmail: string | null): PublishInput {
   const title = requireString(body.title, "title").trim();
   const html = requireString(body.html, "html");
   const password = requireString(body.password, "password");
-  const publisherEmail = resolveApiActorEmail(env);
+  const publisherEmail = resolveApiActorEmail(env, actorEmail ?? undefined);
   const expiresAt = parseExpiresAt(body.expiresAt, env);
   const sourceUrl = parseOptionalUrl(body.sourceUrl, "sourceUrl");
   const maxHtmlBytes = parsePositiveInteger(env.MAX_HTML_BYTES, DEFAULT_MAX_HTML_BYTES);
@@ -820,8 +851,11 @@ function parseTimestamp(value: string | null | undefined): number | null {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
-export function resolveApiActorEmail(env: Pick<Env, "TRUSTED_PUBLISHER_EMAIL" | "PUBLISHER_EMAIL_DOMAIN">): string {
-  const email = env.TRUSTED_PUBLISHER_EMAIL?.trim().toLowerCase();
+export function resolveApiActorEmail(
+  env: Pick<Env, "TRUSTED_PUBLISHER_EMAIL" | "PUBLISHER_EMAIL_DOMAIN">,
+  actorEmail?: string,
+): string {
+  const email = (actorEmail ?? env.TRUSTED_PUBLISHER_EMAIL)?.trim().toLowerCase();
   if (!email) {
     throw new HttpError(500, "missing_publisher_identity", "Trusted publisher identity is not configured");
   }

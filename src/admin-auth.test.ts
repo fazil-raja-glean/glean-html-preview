@@ -83,7 +83,7 @@ describe("publish/admin access gate", () => {
           isLocalDevelopment: true,
         },
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ email: null });
   });
 
   it("does not accept the local bypass secret for non-local publish/admin requests", async () => {
@@ -269,7 +269,37 @@ describe("publish/admin access gate", () => {
           now,
         },
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ email: null });
+  });
+
+  it("extracts the verified Cloudflare Access email when present", async () => {
+    const now = Date.parse("2026-06-18T12:00:00.000Z");
+    const key = await createTestRsaKey("access-key-email");
+    const token = await signTestAccessJwt(key.privateKey, "access-key-email", {
+      iss: "https://email.cloudflareaccess.com",
+      aud: "expected-aud",
+      exp: Math.floor(now / 1000) + 300,
+      email: "Publisher@Example.com",
+    });
+
+    await expect(
+      requirePublishAdminAccess(
+        requestOn(testApiOriginEnv.API_BASE_URL, "/v1/html-previews", {
+          headers: {
+            [CLOUDFLARE_ACCESS_JWT_HEADER]: token,
+          },
+        }),
+        {
+          PUBLISH_ACCESS_TEAM_DOMAIN: "https://email.cloudflareaccess.com",
+          PUBLISH_ACCESS_AUD: "expected-aud",
+        },
+        {
+          fetcher: accessCertsFetcher(key.publicJwk),
+          isLocalDevelopment: false,
+          now,
+        },
+      ),
+    ).resolves.toEqual({ email: "publisher@example.com" });
   });
 });
 

@@ -4,12 +4,20 @@ import { isLocalDevelopmentRequest } from "./origin-policy";
 export interface McpOAuthEnv {
   MCP_BASE_URL?: string;
   MCP_OAUTH_ACCESS_TOKEN_TTL_SECONDS?: string;
+  MCP_OAUTH_ACCESS_AUD?: string;
+  MCP_OAUTH_ACCESS_TEAM_DOMAIN?: string;
   MCP_OAUTH_ALLOWED_REDIRECT_URIS?: string;
+  MCP_OAUTH_ALLOWED_EMAIL_DOMAIN?: string;
   MCP_OAUTH_CLIENT_ID?: string;
   MCP_OAUTH_CLIENT_SECRET?: string;
+  MCP_OAUTH_LOCAL_BYPASS_EMAIL?: string;
   MCP_OAUTH_PUBLIC_CLIENT_IDS?: string;
+  MCP_OAUTH_REQUIRE_USER_AUTH?: string;
   MCP_OAUTH_SCOPES?: string;
   MCP_OAUTH_TOKEN_SECRET?: string;
+  PUBLISH_ACCESS_AUD?: string;
+  PUBLISH_ACCESS_TEAM_DOMAIN?: string;
+  PUBLISHER_EMAIL_DOMAIN?: string;
 }
 
 export type McpOAuthClient =

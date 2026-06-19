@@ -12,6 +12,7 @@ const codexAllowedRedirectUri = "http://127.0.0.1:5555/callback";
 const codexRedirectUri = "http://127.0.0.1:5555/callback/UnEALRF1ZB92";
 const claudeCodeRedirectUri = "http://localhost:5555/callback";
 const oauthScope = "html-preview:publish";
+const oauthActorEmail = "publisher@example.com";
 
 const mcpEnv = {
   MCP_OAUTH_ALLOWED_REDIRECT_URIS: [
@@ -22,7 +23,10 @@ const mcpEnv = {
   ].join("\n"),
   MCP_OAUTH_CLIENT_ID: oauthClientId,
   MCP_OAUTH_CLIENT_SECRET: oauthClientSecret,
+  MCP_OAUTH_ALLOWED_EMAIL_DOMAIN: "example.com",
+  MCP_OAUTH_LOCAL_BYPASS_EMAIL: "Publisher@Example.com",
   MCP_OAUTH_PUBLIC_CLIENT_IDS: `${codexClientId}\n${claudeCodeClientId}`,
+  MCP_OAUTH_REQUIRE_USER_AUTH: "true",
   MCP_OAUTH_SCOPES: oauthScope,
   MCP_OAUTH_TOKEN_SECRET: "dev-token-signing-secret",
   MCP_OAUTH_ACCESS_TOKEN_TTL_SECONDS: "3600",
@@ -85,10 +89,35 @@ describe("MCP endpoint", () => {
       redirect_uri: oauthRedirectUri,
     });
     expect(token.status).toBe(200);
-    await expect(token.json()).resolves.toMatchObject({
-      token_type: "Bearer",
-      expires_in: 3600,
-      scope: oauthScope,
+    const body = (await token.json()) as { access_token?: string; email?: string };
+    expect(body.access_token).toBeTypeOf("string");
+    expect(jwtPayload(body.access_token as string)).toMatchObject({
+      email: oauthActorEmail,
+      sub: oauthClientId,
+    });
+  });
+
+  it("fails closed when user-bound OAuth is enabled without Access or local identity", async () => {
+    const authorizeUrl = new URL("http://localhost:8787/oauth/authorize");
+    authorizeUrl.searchParams.set("response_type", "code");
+    authorizeUrl.searchParams.set("client_id", codexClientId);
+    authorizeUrl.searchParams.set("redirect_uri", codexRedirectUri);
+    authorizeUrl.searchParams.set("scope", oauthScope);
+    authorizeUrl.searchParams.set("code_challenge", await s256CodeChallenge("verifier"));
+    authorizeUrl.searchParams.set("code_challenge_method", "S256");
+
+    const response = await worker.fetch(new Request(authorizeUrl), {
+      ...mcpEnv,
+      MCP_OAUTH_LOCAL_BYPASS_EMAIL: undefined,
+      MCP_OAUTH_ACCESS_TEAM_DOMAIN: "https://team.cloudflareaccess.com",
+      MCP_OAUTH_ACCESS_AUD: "expected-aud",
+    } as never);
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        code: "missing_access_jwt",
+      },
     });
   });
 
@@ -138,6 +167,14 @@ describe("MCP endpoint", () => {
 
     expect(codexToken).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
     expect(claudeCodeToken).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+    expect(jwtPayload(codexToken)).toMatchObject({
+      email: oauthActorEmail,
+      sub: codexClientId,
+    });
+    expect(jwtPayload(claudeCodeToken)).toMatchObject({
+      email: oauthActorEmail,
+      sub: claudeCodeClientId,
+    });
     expect(initialized.status).toBe(200);
   });
 
@@ -263,6 +300,7 @@ describe("MCP endpoint", () => {
   });
 
   it("publishes HTML by forwarding through the API Worker service binding with an internal token", async () => {
+    const accessToken = await requestPublicAuthorizationCodeAccessToken(codexClientId, codexRedirectUri);
     let capturedRequest:
       | {
           url: string;
@@ -304,7 +342,9 @@ describe("MCP endpoint", () => {
           sourceUrl: "https://source.example.test/artifacts/test",
         },
       }),
-      undefined,
+      {
+        Authorization: `Bearer ${accessToken}`,
+      },
       {
         PUBLISH_API: {
           fetch: upstreamFetch,
@@ -336,6 +376,7 @@ describe("MCP endpoint", () => {
     expect(capturedRequest?.method).toBe("POST");
     expect(capturedRequest?.headers.get("Authorization")).toBe("Bearer dev-publish-token");
     expect(capturedRequest?.headers.get("X-Publish-Internal-Service-Token")).toBe("internal-service-token");
+    expect(capturedRequest?.headers.get("X-Publish-Actor-Email")).toBe(oauthActorEmail);
     expect(capturedRequest?.headers.get("CF-Access-Client-Id")).toBeNull();
     expect(capturedRequest?.headers.get("CF-Access-Client-Secret")).toBeNull();
     expect(capturedRequest?.body).toEqual({
@@ -346,7 +387,7 @@ describe("MCP endpoint", () => {
     });
   });
 
-  it("returns tool errors without exposing internal credentials when the API rejects a publish", async () => {
+  it("rejects publish tool calls when the OAuth token is not bound to a Glean user", async () => {
     const response = await postMcp(
       authorizedRpc("tools/call", {
         name: "publish_html_preview",
@@ -356,7 +397,39 @@ describe("MCP endpoint", () => {
           password: "correct horse battery",
         },
       }),
-      undefined,
+      {
+        Authorization: `Bearer ${await requestAccessToken()}`,
+      },
+      {
+        PUBLISH_API: {
+          fetch: vi.fn(async () => new Response(null, { status: 500 })),
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        code: -32602,
+        message: "OAuth token is not bound to an authenticated Glean user",
+      },
+    });
+  });
+
+  it("returns tool errors without exposing internal credentials when the API rejects a publish", async () => {
+    const accessToken = await requestPublicAuthorizationCodeAccessToken(codexClientId, codexRedirectUri);
+    const response = await postMcp(
+      authorizedRpc("tools/call", {
+        name: "publish_html_preview",
+        arguments: {
+          title: "Smoke Test",
+          html: "<!doctype html><html><body><h1>Hello</h1></body></html>",
+          password: "correct horse battery",
+        },
+      }),
+      {
+        Authorization: `Bearer ${accessToken}`,
+      },
       {
         PUBLISH_API: {
           fetch: vi.fn(async () => {
@@ -398,6 +471,7 @@ describe("MCP endpoint", () => {
   });
 
   it("fails closed when the API Worker service binding is missing", async () => {
+    const accessToken = await requestPublicAuthorizationCodeAccessToken(codexClientId, codexRedirectUri);
     const response = await postMcp(
       authorizedRpc("tools/call", {
         name: "publish_html_preview",
@@ -407,6 +481,9 @@ describe("MCP endpoint", () => {
           password: "correct horse battery",
         },
       }),
+      {
+        Authorization: `Bearer ${accessToken}`,
+      },
     );
 
     expect(response.status).toBe(200);
@@ -533,6 +610,23 @@ async function requestPublicAuthorizationCodeAccessToken(clientId: string, redir
   expect(body.scope).toBe(oauthScope);
   expect(body.access_token).toBeTypeOf("string");
   return body.access_token as string;
+}
+
+function jwtPayload(token: string): Record<string, unknown> {
+  const [, encodedPayload] = token.split(".");
+  expect(encodedPayload).toBeTypeOf("string");
+  return JSON.parse(new TextDecoder().decode(base64UrlToBytes(encodedPayload ?? ""))) as Record<string, unknown>;
+}
+
+function base64UrlToBytes(value: string): Uint8Array {
+  const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return bytes;
 }
 
 async function s256CodeChallenge(codeVerifier: string): Promise<string> {

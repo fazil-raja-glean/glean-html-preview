@@ -98,4 +98,16 @@ describe("trusted API actor identity", () => {
       }),
     ).toBe("publisher@internal.example");
   });
+
+  it("uses a verified request actor when provided", () => {
+    expect(
+      resolveApiActorEmail(
+        {
+          TRUSTED_PUBLISHER_EMAIL: "service@example.com",
+          PUBLISHER_EMAIL_DOMAIN: "example.com",
+        },
+        "Publisher@Example.com",
+      ),
+    ).toBe("publisher@example.com");
+  });
 });
