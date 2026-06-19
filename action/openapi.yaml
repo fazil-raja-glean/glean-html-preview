@@ -1,0 +1,89 @@
+openapi: 3.0.3
+info:
+  title: HTML Sharing
+  version: 0.1.0
+servers:
+  - url: https://html-api.glean-share.workers.dev
+paths:
+  /v1/html-previews:
+    post:
+      operationId: publishHtmlPreview
+      summary: Publish a password-protected HTML preview
+      security:
+        - publishBearer: []
+          cloudflareAccessClientId: []
+          cloudflareAccessClientSecret: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - title
+                - html
+                - password
+              properties:
+                title:
+                  type: string
+                  maxLength: 160
+                html:
+                  type: string
+                  description: Complete HTML document to publish.
+                password:
+                  type: string
+                  minLength: 12
+                  description: Required viewer password. Share separately from the returned link.
+                expiresAt:
+                  type: string
+                  format: date-time
+                  description: Optional expiry timestamp. Defaults to the service retention window.
+                sourceUrl:
+                  type: string
+                  format: uri
+                  description: Optional source artifact URL.
+      responses:
+        "201":
+          description: Published preview link.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - url
+                  - slug
+                  - expiresAt
+                  - status
+                properties:
+                  url:
+                    type: string
+                    description: Password-gated preview URL on https://html.glean-share.workers.dev.
+                  slug:
+                    type: string
+                  expiresAt:
+                    type: string
+                  status:
+                    type: string
+        "401":
+          description: Missing bearer token or Cloudflare Access service token.
+        "403":
+          description: Invalid bearer token or Cloudflare Access service token.
+        "429":
+          description: Publish request was rate limited.
+components:
+  securitySchemes:
+    publishBearer:
+      type: http
+      scheme: bearer
+      description: Existing publish API token.
+    cloudflareAccessClientId:
+      type: apiKey
+      in: header
+      name: CF-Access-Client-Id
+      description: Cloudflare Access service token client ID.
+    cloudflareAccessClientSecret:
+      type: apiKey
+      in: header
+      name: CF-Access-Client-Secret
+      description: Cloudflare Access service token client secret.

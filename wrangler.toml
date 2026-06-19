@@ -1,0 +1,103 @@
+name = "html"
+main = "src/index.ts"
+compatibility_date = "2026-06-18"
+workers_dev = true
+preview_urls = false
+
+[vars]
+WORKER_ROLE = "preview"
+PUBLIC_BASE_URL = "https://html.glean-share.workers.dev"
+PUBLISHER_EMAIL_DOMAIN = "glean.com"
+TRUSTED_PUBLISHER_EMAIL = "html-sharing@glean.com"
+DEFAULT_EXPIRES_DAYS = "60"
+MAX_HTML_BYTES = "2000000"
+ACCESS_RATE_LIMIT_WINDOW_SECONDS = "600"
+ACCESS_RATE_LIMIT_LOCK_SECONDS = "900"
+MAX_ACCESS_FAILURES_PER_IP = "8"
+MAX_ACCESS_FAILURES_PER_PREVIEW = "100"
+
+[[ratelimits]]
+name = "EDGE_ACCESS_RATE_LIMITER"
+namespace_id = "8182001"
+simple = { limit = 30, period = 60 }
+
+[[r2_buckets]]
+binding = "HTML_PREVIEWS"
+bucket_name = "html-sharing-previews-prod"
+preview_bucket_name = "html-sharing-previews-dev"
+
+[[d1_databases]]
+binding = "PREVIEW_DB"
+database_name = "html-sharing-metadata-prod"
+database_id = "78fe7172-b574-4da5-949a-2fccd681cb41"
+preview_database_id = "b4a23c9d-e4f0-42df-85e5-028a32b1f8d6"
+
+[env.api]
+name = "html-api"
+main = "src/index.ts"
+compatibility_date = "2026-06-18"
+workers_dev = true
+preview_urls = false
+
+[env.api.vars]
+WORKER_ROLE = "api"
+API_BASE_URL = "https://html-api.glean-share.workers.dev"
+PUBLIC_BASE_URL = "https://html.glean-share.workers.dev"
+PUBLISHER_EMAIL_DOMAIN = "glean.com"
+TRUSTED_PUBLISHER_EMAIL = "html-sharing@glean.com"
+PUBLISH_ACCESS_TEAM_DOMAIN = "https://<team-name>.cloudflareaccess.com"
+PUBLISH_ACCESS_AUD = "<access-application-aud-tag>"
+DEFAULT_EXPIRES_DAYS = "60"
+MAX_HTML_BYTES = "2000000"
+ACCESS_RATE_LIMIT_WINDOW_SECONDS = "600"
+ACCESS_RATE_LIMIT_LOCK_SECONDS = "900"
+MAX_ACCESS_FAILURES_PER_IP = "8"
+MAX_ACCESS_FAILURES_PER_PREVIEW = "100"
+
+[[env.api.ratelimits]]
+name = "EDGE_PUBLISH_RATE_LIMITER"
+namespace_id = "8182002"
+simple = { limit = 20, period = 60 }
+
+[[env.api.r2_buckets]]
+binding = "HTML_PREVIEWS"
+bucket_name = "html-sharing-previews-prod"
+preview_bucket_name = "html-sharing-previews-dev"
+
+[[env.api.d1_databases]]
+binding = "PREVIEW_DB"
+database_name = "html-sharing-metadata-prod"
+database_id = "78fe7172-b574-4da5-949a-2fccd681cb41"
+preview_database_id = "b4a23c9d-e4f0-42df-85e5-028a32b1f8d6"
+
+[env.mcp]
+name = "html-mcp"
+main = "src/index.ts"
+compatibility_date = "2026-06-18"
+workers_dev = true
+preview_urls = false
+r2_buckets = []
+d1_databases = []
+
+[env.mcp.vars]
+WORKER_ROLE = "mcp"
+MCP_BASE_URL = "https://html-mcp.glean-share.workers.dev"
+API_BASE_URL = "https://html-api.glean-share.workers.dev"
+PUBLIC_BASE_URL = "https://html.glean-share.workers.dev"
+PUBLISHER_EMAIL_DOMAIN = "glean.com"
+TRUSTED_PUBLISHER_EMAIL = "html-sharing@glean.com"
+DEFAULT_EXPIRES_DAYS = "60"
+MAX_HTML_BYTES = "2000000"
+ACCESS_RATE_LIMIT_WINDOW_SECONDS = "600"
+ACCESS_RATE_LIMIT_LOCK_SECONDS = "900"
+MAX_ACCESS_FAILURES_PER_IP = "8"
+MAX_ACCESS_FAILURES_PER_PREVIEW = "100"
+
+[[env.mcp.ratelimits]]
+name = "EDGE_MCP_RATE_LIMITER"
+namespace_id = "8182003"
+simple = { limit = 30, period = 60 }
+
+[[env.mcp.services]]
+binding = "PUBLISH_API"
+service = "html-api"

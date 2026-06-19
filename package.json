@@ -1,0 +1,25 @@
+{
+  "name": "html-sharing",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit && vitest run",
+    "test": "vitest run",
+    "dev": "wrangler dev",
+    "deploy": "npm run deploy:preview && npm run deploy:api && npm run deploy:mcp",
+    "deploy:preview": "wrangler deploy --env=\"\"",
+    "deploy:api": "wrangler deploy --env api",
+    "deploy:mcp": "wrangler deploy --env mcp",
+    "deploy:dry-run": "npm run deploy:preview -- --dry-run && npm run deploy:api -- --dry-run && npm run deploy:mcp -- --dry-run",
+    "d1:migrate:local": "node scripts/apply-d1-schema.mjs local",
+    "d1:migrate:dev": "node scripts/apply-d1-schema.mjs dev",
+    "d1:migrate:prod": "node scripts/apply-d1-schema.mjs prod"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "4.20260617.1",
+    "typescript": "6.0.3",
+    "vitest": "4.1.9",
+    "wrangler": "4.102.0"
+  }
+}

@@ -1,0 +1,43 @@
+CREATE TABLE IF NOT EXISTS previews (
+  slug TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  object_key TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  password_salt TEXT NOT NULL,
+  password_iterations INTEGER NOT NULL,
+  password_version INTEGER NOT NULL DEFAULT 1,
+  publisher_email TEXT NOT NULL,
+  source_url TEXT,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  deleted_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS previews_publisher_email_idx
+  ON previews (publisher_email);
+
+CREATE INDEX IF NOT EXISTS previews_expires_at_idx
+  ON previews (expires_at);
+
+CREATE TABLE IF NOT EXISTS audit_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  slug TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  actor_email TEXT,
+  viewer_ip_hash TEXT,
+  created_at TEXT NOT NULL,
+  details_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS audit_events_slug_created_at_idx
+  ON audit_events (slug, created_at);
+
+CREATE TABLE IF NOT EXISTS access_rate_limits (
+  scope TEXT PRIMARY KEY,
+  failed_count INTEGER NOT NULL,
+  window_started_at TEXT NOT NULL,
+  locked_until TEXT
+);
+
+CREATE INDEX IF NOT EXISTS access_rate_limits_locked_until_idx
+  ON access_rate_limits (locked_until);
