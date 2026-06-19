@@ -7,10 +7,12 @@ const oauthClientId = "dev-oauth-client";
 const oauthClientSecret = "dev-oauth-secret";
 const codexClientId = "codex-html-sharing-mcp";
 const claudeCodeClientId = "claude-code-html-sharing-mcp";
+const cursorClientId = "cursor-html-sharing-mcp";
 const oauthRedirectUri = "https://oauth-client.example.test/tools/oauth/callback";
 const codexAllowedRedirectUri = "http://127.0.0.1:5555/callback";
 const codexRedirectUri = "http://127.0.0.1:5555/callback/UnEALRF1ZB92";
 const claudeCodeRedirectUri = "http://localhost:5555/callback";
+const cursorRedirectUri = "cursor://anysphere.cursor-mcp/oauth/callback";
 const oauthScope = "html-preview:publish";
 const oauthActorEmail = "publisher@example.com";
 
@@ -20,12 +22,13 @@ const mcpEnv = {
     "https://oauth-client.example.test/tools/oauth/alternate-callback",
     codexAllowedRedirectUri,
     claudeCodeRedirectUri,
+    cursorRedirectUri,
   ].join("\n"),
   MCP_OAUTH_CLIENT_ID: oauthClientId,
   MCP_OAUTH_CLIENT_SECRET: oauthClientSecret,
   MCP_OAUTH_ALLOWED_EMAIL_DOMAIN: "example.com",
   MCP_OAUTH_LOCAL_BYPASS_EMAIL: "Publisher@Example.com",
-  MCP_OAUTH_PUBLIC_CLIENT_IDS: `${codexClientId}\n${claudeCodeClientId}`,
+  MCP_OAUTH_PUBLIC_CLIENT_IDS: `${codexClientId}\n${claudeCodeClientId}\n${cursorClientId}`,
   MCP_OAUTH_REQUIRE_USER_AUTH: "true",
   MCP_OAUTH_SCOPES: oauthScope,
   MCP_OAUTH_TOKEN_SECRET: "dev-token-signing-secret",
@@ -158,15 +161,17 @@ describe("MCP endpoint", () => {
     });
   });
 
-  it("supports public PKCE OAuth clients for Codex and Claude Code", async () => {
+  it("supports public PKCE OAuth clients for Codex, Claude Code, and Cursor", async () => {
     const codexToken = await requestPublicAuthorizationCodeAccessToken(codexClientId, codexRedirectUri);
     const claudeCodeToken = await requestPublicAuthorizationCodeAccessToken(claudeCodeClientId, claudeCodeRedirectUri);
+    const cursorToken = await requestPublicAuthorizationCodeAccessToken(cursorClientId, cursorRedirectUri);
     const initialized = await postMcp(authorizedRpc("initialize"), {
       Authorization: `Bearer ${codexToken}`,
     });
 
     expect(codexToken).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
     expect(claudeCodeToken).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+    expect(cursorToken).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
     expect(jwtPayload(codexToken)).toMatchObject({
       email: oauthActorEmail,
       sub: codexClientId,
@@ -174,6 +179,10 @@ describe("MCP endpoint", () => {
     expect(jwtPayload(claudeCodeToken)).toMatchObject({
       email: oauthActorEmail,
       sub: claudeCodeClientId,
+    });
+    expect(jwtPayload(cursorToken)).toMatchObject({
+      email: oauthActorEmail,
+      sub: cursorClientId,
     });
     expect(initialized.status).toBe(200);
   });
@@ -585,7 +594,7 @@ async function requestPublicAuthorizationCodeAccessToken(clientId: string, redir
   expect(authorize.status).toBe(302);
 
   const redirect = new URL(authorize.headers.get("Location") ?? "");
-  expect(redirect.origin + redirect.pathname).toBe(redirectUri);
+  expect(redirect.toString().replace(/[?#].*$/, "")).toBe(redirectUri);
   expect(redirect.searchParams.get("error")).toBeNull();
 
   const token = await worker.fetch(

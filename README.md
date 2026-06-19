@@ -125,7 +125,7 @@ MCP_OAUTH_ACCESS_AUD = "<mcp-oauth-access-application-aud-tag>"
 MCP_OAUTH_ALLOWED_EMAIL_DOMAIN = "glean.com"
 ```
 
-When Codex, Claude Code, or Glean starts the authorization-code flow, the browser signs in through Cloudflare Access. The Worker verifies the Access JWT, binds the verified user email into the OAuth code and access token, and records that email as the preview publisher.
+When Glean, Codex, Claude Code, or Cursor starts the authorization-code flow, the browser signs in through Cloudflare Access. The Worker verifies the Access JWT, binds the verified user email into the OAuth code and access token, and records that email as the preview publisher.
 
 ### 6. Generate production tokens
 
@@ -233,7 +233,7 @@ ACCESS_TOKEN="$(
 )"
 ```
 
-Authorization-code login smoke test, matching Codex, Claude Code, and Glean user OAuth:
+Authorization-code login smoke test, matching Glean, Codex, Claude Code, and Cursor user OAuth:
 
 ```sh
 open "$(node -e 'const [base, clientId, redirectUri, scope] = process.argv.slice(1); const url = new URL("/oauth/authorize", base); url.searchParams.set("response_type", "code"); url.searchParams.set("client_id", clientId); url.searchParams.set("redirect_uri", redirectUri); url.searchParams.set("scope", scope); console.log(url.toString())' "$MCP" "$MCP_OAUTH_CLIENT_ID" "$MCP_OAUTH_REDIRECT_URI" "$MCP_OAUTH_SCOPES")"
@@ -331,13 +331,13 @@ Glean should not know `PUBLISH_API_TOKEN`, `PUBLISH_INTERNAL_SERVICE_TOKEN`, `MC
 
 If the tool is enabled for chat users, each publisher should complete the authorization-code flow through Glean SSO. Machine-only `client_credentials` tokens are accepted for handshake and discovery, but the `publish_html_preview` tool rejects tokens that do not contain a verified user email.
 
-### 11. Connect Codex and Claude Code
+### 11. Connect Codex, Claude Code, and Cursor
 
-Codex and Claude Code should use public OAuth clients with S256 PKCE. Configure the MCP Worker with:
+Codex, Claude Code, and Cursor should use public OAuth clients with S256 PKCE. Configure the MCP Worker with:
 
 ```toml
-MCP_OAUTH_PUBLIC_CLIENT_IDS = "codex-html-sharing-mcp,claude-code-html-sharing-mcp"
-MCP_OAUTH_ALLOWED_REDIRECT_URIS = "https://your-glean-callback.example.com/oauth/callback,http://127.0.0.1:5555/callback,http://localhost:5555/callback"
+MCP_OAUTH_PUBLIC_CLIENT_IDS = "codex-html-sharing-mcp,claude-code-html-sharing-mcp,cursor-html-sharing-mcp"
+MCP_OAUTH_ALLOWED_REDIRECT_URIS = "https://your-glean-callback.example.com/oauth/callback,http://127.0.0.1:5555/callback,http://localhost:5555/callback,cursor://anysphere.cursor-mcp/oauth/callback"
 MCP_OAUTH_REQUIRE_USER_AUTH = "true"
 ```
 
@@ -372,6 +372,24 @@ claude mcp add \
 ```
 
 Then run `/mcp` in Claude Code and authenticate the `html-sharing` server.
+
+For Cursor, add a remote server to `.cursor/mcp.json` or `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "html-sharing": {
+      "url": "https://html-mcp.glean-share.workers.dev/mcp",
+      "auth": {
+        "CLIENT_ID": "cursor-html-sharing-mcp",
+        "scopes": ["mcp:tools"]
+      }
+    }
+  }
+}
+```
+
+Cursor uses the fixed OAuth redirect URI `cursor://anysphere.cursor-mcp/oauth/callback`; keep that value in `MCP_OAUTH_ALLOWED_REDIRECT_URIS`.
 
 ## Local Development
 

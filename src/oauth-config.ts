@@ -53,6 +53,7 @@ export interface McpOAuthTokenConfig extends McpOAuthPublicConfig {
 const DEFAULT_ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
 const DEFAULT_SCOPE = "mcp:tools";
 const MAX_ACCESS_TOKEN_TTL_SECONDS = 24 * 60 * 60;
+const CURSOR_MCP_REDIRECT_URI = "cursor://anysphere.cursor-mcp/oauth/callback";
 
 export function mcpOAuthPublicConfig(request: Request, env: McpOAuthEnv): McpOAuthPublicConfig {
   const issuer = oauthIssuer(request, env);
@@ -114,7 +115,11 @@ export function validatedRedirectUri(value: string | null, config: McpOAuthConfi
   }
 
   if (!isAllowedRedirectProtocol(redirectUri)) {
-    throw new HttpError(400, "invalid_request", "redirect_uri must be HTTPS or loopback HTTP");
+    throw new HttpError(
+      400,
+      "invalid_request",
+      "redirect_uri must be HTTPS, loopback HTTP, or Cursor's MCP callback URI",
+    );
   }
 
   if (!isAllowedRedirectUri(redirectUri, config.allowedRedirectUris)) {
@@ -243,7 +248,7 @@ function normalizeRedirectUri(value: string): string {
     throw new HttpError(
       500,
       "invalid_mcp_oauth_allowed_redirect_uris",
-      "Configured redirect URI must be HTTPS unless it uses loopback HTTP",
+      "Configured redirect URI must be HTTPS unless it uses loopback HTTP or Cursor's MCP callback URI",
     );
   }
 
@@ -280,7 +285,15 @@ function uniqueList(values: string[]): string[] {
 }
 
 function isAllowedRedirectProtocol(redirectUri: URL): boolean {
-  return redirectUri.protocol === "https:" || isLoopbackHost(redirectUri.hostname);
+  return (
+    redirectUri.protocol === "https:" ||
+    isLoopbackHost(redirectUri.hostname) ||
+    isCursorMcpRedirectUri(redirectUri)
+  );
+}
+
+function isCursorMcpRedirectUri(redirectUri: URL): boolean {
+  return redirectUri.toString() === CURSOR_MCP_REDIRECT_URI;
 }
 
 function isLoopbackHost(hostname: string): boolean {
