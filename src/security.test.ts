@@ -67,15 +67,35 @@ describe("preview HTML security headers", () => {
 
 describe("trusted API actor identity", () => {
   it("uses the configured service identity instead of request body identity", () => {
-    expect(resolveApiActorEmail({ TRUSTED_PUBLISHER_EMAIL: "HTML-Sharing@Glean.com" })).toBe(
-      "html-sharing@glean.com",
-    );
+    expect(
+      resolveApiActorEmail({
+        TRUSTED_PUBLISHER_EMAIL: "HTML-Sharing@Example.com",
+        PUBLISHER_EMAIL_DOMAIN: "example.com",
+      }),
+    ).toBe("html-sharing@example.com");
   });
 
-  it("requires a configured trusted identity in the allowed domain", () => {
-    expect(() => resolveApiActorEmail({})).toThrow("Trusted publisher identity is not configured");
-    expect(() => resolveApiActorEmail({ TRUSTED_PUBLISHER_EMAIL: "attacker@example.com" })).toThrow(
-      "publisherEmail must be a @glean.com address",
+  it("requires a configured trusted identity and allowed domain", () => {
+    expect(() => resolveApiActorEmail({ PUBLISHER_EMAIL_DOMAIN: "example.com" })).toThrow(
+      "Trusted publisher identity is not configured",
     );
+    expect(() => resolveApiActorEmail({ TRUSTED_PUBLISHER_EMAIL: "publisher@example.com" })).toThrow(
+      "Publisher email domain is not configured",
+    );
+    expect(() =>
+      resolveApiActorEmail({
+        TRUSTED_PUBLISHER_EMAIL: "attacker@other.example.com",
+        PUBLISHER_EMAIL_DOMAIN: "example.com",
+      }),
+    ).toThrow("publisherEmail must be a @example.com address");
+  });
+
+  it("allows forks to configure their own trusted publisher domain", () => {
+    expect(
+      resolveApiActorEmail({
+        TRUSTED_PUBLISHER_EMAIL: "Publisher@Internal.example",
+        PUBLISHER_EMAIL_DOMAIN: "internal.example",
+      }),
+    ).toBe("publisher@internal.example");
   });
 });

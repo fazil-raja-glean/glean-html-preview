@@ -4,7 +4,8 @@ Cloudflare Workers service for publishing untrusted HTML as password-protected, 
 
 The preferred integration is a Glean remote MCP server:
 
-- Glean calls `https://html-mcp.glean-share.workers.dev/mcp` with one API key.
+- Glean obtains short-lived OAuth access tokens from `${MCP_BASE_URL}/oauth/token`.
+- Glean calls `${MCP_BASE_URL}/mcp` with those OAuth bearer tokens.
 - The MCP Worker calls the protected API Worker through a Cloudflare service binding.
 - Uploaded HTML is stored privately in R2 and served only through the preview Worker.
 - The preview Worker requires a viewer password and serves the uploaded HTML with a restrictive CSP sandbox.
@@ -15,9 +16,9 @@ This repo intentionally has three Worker surfaces:
 
 | Surface | Worker | URL | Purpose |
 | --- | --- | --- | --- |
-| Preview | `html` | `https://html.glean-share.workers.dev` | Viewer password gate and sandboxed HTML serving |
-| API | `html-api` | `https://html-api.glean-share.workers.dev` | Publish, unpublish, and password rotation |
-| MCP | `html-mcp` | `https://html-mcp.glean-share.workers.dev` | Glean MCP JSON-RPC endpoint |
+| Preview | `html` | `${PUBLIC_BASE_URL}` | Viewer password gate and sandboxed HTML serving |
+| API | `html-api` | `${API_BASE_URL}` | Publish, unpublish, and password rotation |
+| MCP | `html-mcp` | `${MCP_BASE_URL}` | Glean MCP JSON-RPC endpoint |
 
 Key rules:
 
@@ -39,9 +40,11 @@ Do not commit real secrets. `.env`, `.dev.vars`, `.wrangler/`, and `node_modules
 | `PASSWORD_PEPPER` | yes | yes | no | no |
 | `PUBLISH_API_TOKEN` | no | yes | yes | no |
 | `PUBLISH_INTERNAL_SERVICE_TOKEN` | no | yes | yes | no |
-| `MCP_API_TOKEN` | no | no | yes | yes |
+| `MCP_OAUTH_CLIENT_ID` | no | no | yes | yes |
+| `MCP_OAUTH_CLIENT_SECRET` | no | no | yes | yes |
+| `MCP_OAUTH_TOKEN_SECRET` | no | no | yes | no |
 
-`PUBLISH_ACCESS_TEAM_DOMAIN`, `PUBLISH_ACCESS_AUD`, Worker names, R2 bucket names, D1 IDs, and rate-limit namespace IDs are configuration, not bearer secrets. They can live in `wrangler.toml`.
+`PUBLISH_ACCESS_TEAM_DOMAIN`, `PUBLISH_ACCESS_AUD`, `MCP_OAUTH_ALLOWED_REDIRECT_URIS`, `MCP_OAUTH_PUBLIC_CLIENT_IDS`, `MCP_OAUTH_SCOPES`, Worker names, R2 bucket names, D1 IDs, and rate-limit namespace IDs are configuration, not bearer secrets. They can live in `wrangler.toml`.
 
 ## Deploy MCP From Scratch
 
@@ -92,8 +95,8 @@ Create three Cloudflare Worker Rate Limiting namespaces, then put their IDs into
 In Cloudflare Zero Trust:
 
 1. Open **Access -> Applications**.
-2. Create an application for `https://html-api.glean-share.workers.dev`.
-3. Do not protect `https://html.glean-share.workers.dev`.
+2. Create an application for `${API_BASE_URL}`.
+3. Do not protect `${PUBLIC_BASE_URL}`.
 4. Copy the Access team domain, for example `https://<team>.cloudflareaccess.com`.
 5. Copy the application AUD tag.
 6. Update `wrangler.toml`:
@@ -114,7 +117,8 @@ export COOKIE_SIGNING_SECRET="$(openssl rand -base64 48)"
 export PASSWORD_PEPPER="$(openssl rand -base64 48)"
 export PUBLISH_API_TOKEN="$(openssl rand -base64 48)"
 export PUBLISH_INTERNAL_SERVICE_TOKEN="$(openssl rand -base64 48)"
-export MCP_API_TOKEN="$(openssl rand -base64 48)"
+export MCP_OAUTH_CLIENT_SECRET="$(openssl rand -base64 48)"
+export MCP_OAUTH_TOKEN_SECRET="$(openssl rand -base64 48)"
 ```
 
 Only rotate `PASSWORD_PEPPER` before real traffic exists, or when invalidating existing preview passwords is acceptable.
@@ -135,7 +139,8 @@ printf '%s' "$PUBLISH_API_TOKEN" | npx wrangler secret put PUBLISH_API_TOKEN --e
 printf '%s' "$PUBLISH_INTERNAL_SERVICE_TOKEN" | npx wrangler secret put PUBLISH_INTERNAL_SERVICE_TOKEN --env api
 printf '%s' "$PUBLISH_INTERNAL_SERVICE_TOKEN" | npx wrangler secret put PUBLISH_INTERNAL_SERVICE_TOKEN --env mcp
 
-printf '%s' "$MCP_API_TOKEN" | npx wrangler secret put MCP_API_TOKEN --env mcp
+printf '%s' "$MCP_OAUTH_CLIENT_SECRET" | npx wrangler secret put MCP_OAUTH_CLIENT_SECRET --env mcp
+printf '%s' "$MCP_OAUTH_TOKEN_SECRET" | npx wrangler secret put MCP_OAUTH_TOKEN_SECRET --env mcp
 ```
 
 ### 6. Apply the schema
@@ -171,7 +176,11 @@ npm run deploy
 ### 8. Smoke test the live MCP endpoint
 
 ```sh
-export MCP="https://html-mcp.glean-share.workers.dev"
+export MCP="https://your-mcp-worker.example.com"
+export MCP_OAUTH_CLIENT_ID="glean-html-sharing-mcp"
+export MCP_OAUTH_CLIENT_SECRET="<client-secret-configured-in-glean>"
+export MCP_OAUTH_SCOPES="mcp:tools"
+export MCP_OAUTH_REDIRECT_URI="https://your-oauth-client.example.com/oauth/callback"
 ```
 
 Auth checks:
@@ -181,27 +190,46 @@ curl -i "$MCP/mcp" \
   -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","id":1,"method":"initialize"}'
 
-curl -i "$MCP/mcp" \
-  -H "Authorization: Bearer wrong-token" \
-  -H "Content-Type: application/json" \
-  --data '{"jsonrpc":"2.0","id":1,"method":"initialize"}'
+curl -i "$MCP/oauth/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data 'grant_type=client_credentials&client_id=wrong&client_secret=wrong'
 ```
 
 Expected:
 
-- missing bearer token returns `401`
-- wrong bearer token returns `403`
+- missing MCP bearer token returns `401` with a `WWW-Authenticate` OAuth challenge
+- wrong OAuth client credentials return `401`
+
+Get an OAuth access token:
+
+```sh
+ACCESS_TOKEN="$(
+  curl -sS "$MCP/oauth/token" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    --data-urlencode 'grant_type=client_credentials' \
+    --data-urlencode "client_id=$MCP_OAUTH_CLIENT_ID" \
+    --data-urlencode "client_secret=$MCP_OAUTH_CLIENT_SECRET" \
+    --data-urlencode "scope=$MCP_OAUTH_SCOPES" \
+    | node -e 'let data=""; process.stdin.on("data", c => data += c); process.stdin.on("end", () => console.log(JSON.parse(data).access_token));'
+)"
+```
+
+Optional authorization-code smoke test, matching Glean's OAuth admin UI:
+
+```sh
+open "$(node -e 'const [base, clientId, redirectUri, scope] = process.argv.slice(1); const url = new URL("/oauth/authorize", base); url.searchParams.set("response_type", "code"); url.searchParams.set("client_id", clientId); url.searchParams.set("redirect_uri", redirectUri); url.searchParams.set("scope", scope); console.log(url.toString())' "$MCP" "$MCP_OAUTH_CLIENT_ID" "$MCP_OAUTH_REDIRECT_URI" "$MCP_OAUTH_SCOPES")"
+```
 
 MCP handshake and tool discovery:
 
 ```sh
 curl -sS "$MCP/mcp" \
-  -H "Authorization: Bearer $MCP_API_TOKEN" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"curl-smoke","version":"1.0.0"}}}'
 
 curl -sS "$MCP/mcp" \
-  -H "Authorization: Bearer $MCP_API_TOKEN" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
 ```
@@ -215,7 +243,7 @@ Publish through MCP:
 
 ```sh
 curl -sS "$MCP/mcp" \
-  -H "Authorization: Bearer $MCP_API_TOKEN" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   --data '{
     "jsonrpc": "2.0",
@@ -238,7 +266,7 @@ Expected response includes:
 {
   "result": {
     "structuredContent": {
-      "url": "https://html.glean-share.workers.dev/p/<slug>",
+      "url": "${PUBLIC_BASE_URL}/p/<slug>",
       "slug": "<slug>",
       "status": "active"
     }
@@ -257,24 +285,71 @@ In Glean Admin Console:
 5. Choose **Import tools from MCP server**.
 6. Set **MCP server name** to `Secure HTML Preview Publisher`.
 7. Set **Description** to `Publishes password-protected sandboxed HTML previews and returns shareable URLs.`
-8. Set **MCP server URL** to `https://html-mcp.glean-share.workers.dev/mcp`.
+8. Set **MCP server URL** to `${MCP_BASE_URL}/mcp`.
 9. Leave **Transport type** as **Streaming HTTP**.
-10. Set **Authentication method** to **API Key**.
-11. Paste `MCP_API_TOKEN` into **Enter API key**.
-12. Click **Initiate connection**.
-13. Click **Save** if Glean asks you to save before discovery.
-14. Click **Fetch tools** or **Refresh tools**.
-15. Confirm the discovered tool is **Publish Html Preview**.
-16. Keep Chat visibility off until you intentionally choose who can use it.
-17. Enable only the users or groups that should be allowed to publish hosted HTML previews.
+10. Set **Authentication method** to **OAuth**.
+11. Set **Token endpoint auth method** to **Client Secret (POST)**.
+12. Set **Client ID** to the configured `MCP_OAUTH_CLIENT_ID`.
+13. Paste `MCP_OAUTH_CLIENT_SECRET` into **Client secret**.
+14. Set **Authorization URL** to `${MCP_BASE_URL}/oauth/authorize`.
+15. Set **Token URL** to `${MCP_BASE_URL}/oauth/token`.
+16. Set **Scopes** to the configured `MCP_OAUTH_SCOPES`.
+17. Confirm the **Callback URL** is included in `MCP_OAUTH_ALLOWED_REDIRECT_URIS`.
+18. Click **Initiate connection** or **Refresh tools**.
+19. Click **Save** if Glean asks you to save before discovery.
+20. Click **Fetch tools** or **Refresh tools**.
+21. Confirm the discovered tool is **Publish Html Preview**.
+22. Keep Chat visibility off until you intentionally choose who can use it.
+23. Enable only the users or groups that should be allowed to publish hosted HTML previews.
 
-Glean should send only:
+Glean should send only short-lived access tokens to `/mcp`:
 
 ```text
-Authorization: Bearer <MCP_API_TOKEN>
+Authorization: Bearer <oauth-access-token>
 ```
 
-Glean should not know `PUBLISH_API_TOKEN`, `PUBLISH_INTERNAL_SERVICE_TOKEN`, `COOKIE_SIGNING_SECRET`, or `PASSWORD_PEPPER`.
+Glean should not know `PUBLISH_API_TOKEN`, `PUBLISH_INTERNAL_SERVICE_TOKEN`, `MCP_OAUTH_TOKEN_SECRET`, `COOKIE_SIGNING_SECRET`, or `PASSWORD_PEPPER`.
+
+### 10. Connect Codex and Claude Code
+
+Codex and Claude Code should use public OAuth clients with S256 PKCE. Configure the MCP Worker with:
+
+```toml
+MCP_OAUTH_PUBLIC_CLIENT_IDS = "codex-html-sharing-mcp,claude-code-html-sharing-mcp"
+MCP_OAUTH_ALLOWED_REDIRECT_URIS = "https://your-glean-callback.example.com/oauth/callback,http://127.0.0.1:5555/callback,http://localhost:5555/callback"
+```
+
+For Codex, use a fixed callback URL so the Worker can allow-list it:
+
+```toml
+# ~/.codex/config.toml
+mcp_oauth_callback_port = 5555
+mcp_oauth_callback_url = "http://127.0.0.1:5555/callback"
+```
+
+Then add and log in:
+
+```sh
+codex mcp add html_sharing \
+  --url "$MCP/mcp" \
+  --oauth-client-id codex-html-sharing-mcp \
+  --oauth-resource "$MCP/mcp"
+
+codex mcp login html_sharing
+```
+
+For Claude Code:
+
+```sh
+claude mcp add \
+  --transport http \
+  --client-id claude-code-html-sharing-mcp \
+  --callback-port 5555 \
+  html-sharing \
+  "$MCP/mcp"
+```
+
+Then run `/mcp` in Claude Code and authenticate the `html-sharing` server.
 
 ## Local Development
 
@@ -282,18 +357,24 @@ Create `.dev.vars` with local-only random values:
 
 ```sh
 LOCAL_PUBLISH_API_TOKEN="$(openssl rand -base64 48)"
-LOCAL_MCP_API_TOKEN="$(openssl rand -base64 48)"
+LOCAL_MCP_OAUTH_CLIENT_SECRET="$(openssl rand -base64 48)"
+LOCAL_MCP_OAUTH_TOKEN_SECRET="$(openssl rand -base64 48)"
 LOCAL_ADMIN_BYPASS_SECRET="$(openssl rand -base64 48)"
 LOCAL_COOKIE_SIGNING_SECRET="$(openssl rand -base64 48)"
 LOCAL_PASSWORD_PEPPER="$(openssl rand -base64 48)"
 
 cat > .dev.vars <<EOF
 PUBLISH_API_TOKEN=$LOCAL_PUBLISH_API_TOKEN
-MCP_API_TOKEN=$LOCAL_MCP_API_TOKEN
+MCP_OAUTH_CLIENT_ID=local-html-sharing-mcp
+MCP_OAUTH_PUBLIC_CLIENT_IDS=codex-html-sharing-mcp,claude-code-html-sharing-mcp
+MCP_OAUTH_ALLOWED_REDIRECT_URIS=http://localhost:8787/oauth/local-callback,http://127.0.0.1:5555/callback,http://localhost:5555/callback
+MCP_OAUTH_SCOPES=mcp:tools
+MCP_OAUTH_CLIENT_SECRET=$LOCAL_MCP_OAUTH_CLIENT_SECRET
+MCP_OAUTH_TOKEN_SECRET=$LOCAL_MCP_OAUTH_TOKEN_SECRET
 PUBLISH_ADMIN_LOCAL_BYPASS_SECRET=$LOCAL_ADMIN_BYPASS_SECRET
 COOKIE_SIGNING_SECRET=$LOCAL_COOKIE_SIGNING_SECRET
 PASSWORD_PEPPER=$LOCAL_PASSWORD_PEPPER
-TRUSTED_PUBLISHER_EMAIL=html-sharing@glean.com
+TRUSTED_PUBLISHER_EMAIL=html-sharing@example.com
 WORKER_ROLE=combined
 EOF
 ```
@@ -322,14 +403,21 @@ curl -i http://localhost:8787/v1/html-previews \
 
 ## Rotation
 
-Rotate `MCP_API_TOKEN` when a Glean credential is exposed:
+Rotate `MCP_OAUTH_CLIENT_SECRET` when the credential configured in Glean is exposed:
 
 ```sh
-export MCP_API_TOKEN="$(openssl rand -base64 48)"
-printf '%s' "$MCP_API_TOKEN" | npx wrangler secret put MCP_API_TOKEN --env mcp
+export MCP_OAUTH_CLIENT_SECRET="$(openssl rand -base64 48)"
+printf '%s' "$MCP_OAUTH_CLIENT_SECRET" | npx wrangler secret put MCP_OAUTH_CLIENT_SECRET --env mcp
 ```
 
-Then update the API key in the Glean MCP server configuration.
+Then update the client secret in the Glean MCP server configuration.
+
+Rotate `MCP_OAUTH_TOKEN_SECRET` when the Worker-side token signing secret is exposed. This immediately invalidates outstanding MCP access tokens:
+
+```sh
+export MCP_OAUTH_TOKEN_SECRET="$(openssl rand -base64 48)"
+printf '%s' "$MCP_OAUTH_TOKEN_SECRET" | npx wrangler secret put MCP_OAUTH_TOKEN_SECRET --env mcp
+```
 
 Rotate `PUBLISH_API_TOKEN` or `PUBLISH_INTERNAL_SERVICE_TOKEN` when Worker-to-Worker credentials are exposed:
 
@@ -358,4 +446,4 @@ The legacy custom action requires Glean to hold:
 - `CF-Access-Client-Id: <access-service-token-client-id>`
 - `CF-Access-Client-Secret: <access-service-token-client-secret>`
 
-Use MCP whenever possible because Glean only needs `MCP_API_TOKEN`.
+Use MCP whenever possible because Glean only needs the OAuth client credential, and the MCP Worker keeps the publish credentials internal.

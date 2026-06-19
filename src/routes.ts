@@ -1,5 +1,15 @@
 export type RouteSurface = "api" | "preview" | "mcp" | "both" | "unknown";
 
+export type OAuthRouteAction = "authorizationServerMetadata" | "protectedResourceMetadata" | "authorize" | "token";
+
+const OAUTH_ROUTE_ACTIONS: Record<string, OAuthRouteAction> = {
+  "/.well-known/oauth-authorization-server": "authorizationServerMetadata",
+  "/.well-known/oauth-protected-resource": "protectedResourceMetadata",
+  "/.well-known/oauth-protected-resource/mcp": "protectedResourceMetadata",
+  "/oauth/authorize": "authorize",
+  "/oauth/token": "token",
+};
+
 export type Route =
   | {
       kind: "health";
@@ -21,6 +31,11 @@ export type Route =
     }
   | {
       kind: "mcp";
+      surface: "mcp";
+    }
+  | {
+      action: OAuthRouteAction;
+      kind: "oauth";
       surface: "mcp";
     }
   | {
@@ -49,6 +64,11 @@ export function routeForPath(pathname: string): Route {
 
   if (pathname === "/mcp") {
     return { kind: "mcp", surface: "mcp" };
+  }
+
+  const oauthAction = oauthRouteAction(pathname);
+  if (oauthAction) {
+    return { action: oauthAction, kind: "oauth", surface: "mcp" };
   }
 
   const unpublishMatch = pathname.match(/^\/v1\/html-previews\/([A-Za-z0-9_-]+)\/unpublish$/);
@@ -88,4 +108,8 @@ export function routeForPath(pathname: string): Route {
   }
 
   return { kind: "unknown", surface: "unknown" };
+}
+
+function oauthRouteAction(pathname: string): OAuthRouteAction | null {
+  return OAUTH_ROUTE_ACTIONS[pathname] ?? null;
 }

@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { edgeRateLimitKey, enforceEdgeRateLimit } from "./edge-rate-limit";
+import { requestOn, testApiOriginEnv, testPreviewOriginEnv } from "./test-fixtures";
 
 describe("edge rate limiting", () => {
   it("keys limits by route and hashed Cloudflare IP", async () => {
-    const request = new Request("https://html.glean-share.workers.dev/p/abc/access", {
+    const request = requestOn(testPreviewOriginEnv.PUBLIC_BASE_URL, "/p/abc/access", {
       headers: {
         "CF-Connecting-IP": "203.0.113.10",
       },
@@ -24,7 +25,7 @@ describe("edge rate limiting", () => {
     const limiter: RateLimit = {
       limit: vi.fn().mockResolvedValue({ success: false }),
     };
-    const request = new Request("https://html-api.glean-share.workers.dev/v1/html-previews", {
+    const request = requestOn(testApiOriginEnv.API_BASE_URL, "/v1/html-previews", {
       headers: {
         "CF-Connecting-IP": "203.0.113.10",
       },
@@ -58,7 +59,7 @@ describe("edge rate limiting", () => {
   });
 
   it("continues to the app-level limiter when the edge binding is unavailable or fails", async () => {
-    const request = new Request("https://html.glean-share.workers.dev/p/abc/access");
+    const request = requestOn(testPreviewOriginEnv.PUBLIC_BASE_URL, "/p/abc/access");
     const failingLimiter: RateLimit = {
       limit: vi.fn().mockRejectedValue(new Error("rate limit backend unavailable")),
     };

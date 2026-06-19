@@ -9,6 +9,13 @@ import {
 import { toBase64Url, utf8 } from "./encoding";
 import worker from "./index";
 import { INTERNAL_PUBLISH_SERVICE_TOKEN_HEADER } from "./mcp";
+import { requestOn, testApiOriginEnv } from "./test-fixtures";
+
+const apiWorkerEnv = {
+  ...testApiOriginEnv,
+  PUBLISH_API_TOKEN: "dev-publish-token",
+  PUBLISH_INTERNAL_SERVICE_TOKEN: "internal-service-token",
+} as const;
 
 describe("publish/admin access gate", () => {
   it.each([
@@ -82,7 +89,7 @@ describe("publish/admin access gate", () => {
   it("does not accept the local bypass secret for non-local publish/admin requests", async () => {
     await expect(
       requirePublishAdminAccess(
-        new Request("https://html-api.glean-share.workers.dev/v1/html-previews", {
+        requestOn(testApiOriginEnv.API_BASE_URL, "/v1/html-previews", {
           headers: {
             [LOCAL_PUBLISH_ADMIN_SECRET_HEADER]: "dev-second-lock",
           },
@@ -99,7 +106,7 @@ describe("publish/admin access gate", () => {
 
   it("accepts the internal service token for MCP-to-API service binding requests", async () => {
     const response = await worker.fetch(
-      new Request("https://html-api.glean-share.workers.dev/v1/html-previews", {
+      requestOn(apiWorkerEnv.API_BASE_URL, "/v1/html-previews", {
         method: "POST",
         headers: {
           Authorization: "Bearer dev-publish-token",
@@ -108,13 +115,7 @@ describe("publish/admin access gate", () => {
         },
         body: "{}",
       }),
-      {
-        WORKER_ROLE: "api",
-        API_BASE_URL: "https://html-api.glean-share.workers.dev",
-        PUBLIC_BASE_URL: "https://html.glean-share.workers.dev",
-        PUBLISH_API_TOKEN: "dev-publish-token",
-        PUBLISH_INTERNAL_SERVICE_TOKEN: "internal-service-token",
-      } as never,
+      apiWorkerEnv as never,
     );
 
     expect(response.status).toBe(400);
@@ -128,7 +129,7 @@ describe("publish/admin access gate", () => {
 
   it("rejects incorrect internal service tokens before publish/admin mutation", async () => {
     const response = await worker.fetch(
-      new Request("https://html-api.glean-share.workers.dev/v1/html-previews", {
+      requestOn(apiWorkerEnv.API_BASE_URL, "/v1/html-previews", {
         method: "POST",
         headers: {
           Authorization: "Bearer dev-publish-token",
@@ -137,13 +138,7 @@ describe("publish/admin access gate", () => {
         },
         body: "{}",
       }),
-      {
-        WORKER_ROLE: "api",
-        API_BASE_URL: "https://html-api.glean-share.workers.dev",
-        PUBLIC_BASE_URL: "https://html.glean-share.workers.dev",
-        PUBLISH_API_TOKEN: "dev-publish-token",
-        PUBLISH_INTERNAL_SERVICE_TOKEN: "internal-service-token",
-      } as never,
+      apiWorkerEnv as never,
     );
 
     expect(response.status).toBe(403);
@@ -259,7 +254,7 @@ describe("publish/admin access gate", () => {
 
     await expect(
       requirePublishAdminAccess(
-        new Request("https://html-api.glean-share.workers.dev/v1/html-previews", {
+        requestOn(testApiOriginEnv.API_BASE_URL, "/v1/html-previews", {
           headers: {
             [CLOUDFLARE_ACCESS_JWT_HEADER]: token,
           },

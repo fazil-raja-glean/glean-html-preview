@@ -2,26 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { enforceConfiguredRouteOrigin, publicBaseUrl } from "./origin-policy";
 import { routeForPath } from "./routes";
-
-const apiEnv = {
-  WORKER_ROLE: "api",
-  API_BASE_URL: "https://html-api.glean-share.workers.dev",
-  MCP_BASE_URL: "https://html-mcp.glean-share.workers.dev",
-  PUBLIC_BASE_URL: "https://html.glean-share.workers.dev",
-};
-
-const mcpEnv = {
-  WORKER_ROLE: "mcp",
-  API_BASE_URL: "https://html-api.glean-share.workers.dev",
-  MCP_BASE_URL: "https://html-mcp.glean-share.workers.dev",
-  PUBLIC_BASE_URL: "https://html.glean-share.workers.dev",
-};
-
-const previewEnv = {
-  WORKER_ROLE: "preview",
-  MCP_BASE_URL: "https://html-mcp.glean-share.workers.dev",
-  PUBLIC_BASE_URL: "https://html.glean-share.workers.dev",
-};
+import { requestOn, testApiOriginEnv, testMcpOriginEnv, testPreviewOriginEnv } from "./test-fixtures";
 
 describe("route origin policy", () => {
   it("classifies API and preview paths once for routing and origin checks", () => {
@@ -32,78 +13,131 @@ describe("route origin policy", () => {
       surface: "api",
     });
     expect(routeForPath("/mcp")).toEqual({ kind: "mcp", surface: "mcp" });
+    expect(routeForPath("/oauth/token")).toEqual({ action: "token", kind: "oauth", surface: "mcp" });
+    expect(routeForPath("/.well-known/oauth-authorization-server")).toEqual({
+      action: "authorizationServerMetadata",
+      kind: "oauth",
+      surface: "mcp",
+    });
+    expect(routeForPath("/.well-known/oauth-protected-resource")).toEqual({
+      action: "protectedResourceMetadata",
+      kind: "oauth",
+      surface: "mcp",
+    });
+    expect(routeForPath("/.well-known/oauth-protected-resource/mcp")).toEqual({
+      action: "protectedResourceMetadata",
+      kind: "oauth",
+      surface: "mcp",
+    });
+    expect(routeForPath("/oauth/authorize")).toEqual({ action: "authorize", kind: "oauth", surface: "mcp" });
     expect(routeForPath("/p/abc123/access")).toEqual({ kind: "access", slug: "abc123", surface: "preview" });
     expect(routeForPath("/p/abc123")).toEqual({ kind: "preview", slug: "abc123", surface: "preview" });
     expect(routeForPath("/nope")).toEqual({ kind: "unknown", surface: "unknown" });
   });
 
   it("keeps publish routes on the API worker and preview routes on the preview worker", () => {
-    const apiRequest = new Request("https://html-api.glean-share.workers.dev/v1/html-previews");
-    const previewRequest = new Request("https://html.glean-share.workers.dev/p/abc123");
+    const apiRequest = requestOn(testApiOriginEnv.API_BASE_URL, "/v1/html-previews");
+    const previewRequest = requestOn(testPreviewOriginEnv.PUBLIC_BASE_URL, "/p/abc123");
 
     expect(
-      enforceConfiguredRouteOrigin(apiRequest, new URL(apiRequest.url), apiEnv, routeForPath("/v1/html-previews")),
+      enforceConfiguredRouteOrigin(
+        apiRequest,
+        new URL(apiRequest.url),
+        testApiOriginEnv,
+        routeForPath("/v1/html-previews"),
+      ),
     ).toBeNull();
     expect(
       enforceConfiguredRouteOrigin(
         previewRequest,
         new URL(previewRequest.url),
-        previewEnv,
+        testPreviewOriginEnv,
         routeForPath("/p/abc123"),
       ),
     ).toBeNull();
   });
 
   it("keeps MCP routes only on the MCP worker", () => {
-    const mcpRequest = new Request("https://html-mcp.glean-share.workers.dev/mcp");
-    const apiMcpRequest = new Request("https://html-api.glean-share.workers.dev/mcp");
-    const previewMcpRequest = new Request("https://html.glean-share.workers.dev/mcp");
+    const mcpRequest = requestOn(testMcpOriginEnv.MCP_BASE_URL, "/mcp");
+    const oauthAuthorizeRequest = requestOn(testMcpOriginEnv.MCP_BASE_URL, "/oauth/authorize");
+    const oauthTokenRequest = requestOn(testMcpOriginEnv.MCP_BASE_URL, "/oauth/token");
+    const apiMcpRequest = requestOn(testApiOriginEnv.API_BASE_URL, "/mcp");
+    const previewMcpRequest = requestOn(testPreviewOriginEnv.PUBLIC_BASE_URL, "/mcp");
 
-    expect(enforceConfiguredRouteOrigin(mcpRequest, new URL(mcpRequest.url), mcpEnv, routeForPath("/mcp"))).toBeNull();
-    expect(enforceConfiguredRouteOrigin(apiMcpRequest, new URL(apiMcpRequest.url), apiEnv, routeForPath("/mcp"))?.status).toBe(
-      404,
-    );
     expect(
-      enforceConfiguredRouteOrigin(previewMcpRequest, new URL(previewMcpRequest.url), previewEnv, routeForPath("/mcp"))
+      enforceConfiguredRouteOrigin(mcpRequest, new URL(mcpRequest.url), testMcpOriginEnv, routeForPath("/mcp")),
+    ).toBeNull();
+    expect(
+      enforceConfiguredRouteOrigin(
+        oauthAuthorizeRequest,
+        new URL(oauthAuthorizeRequest.url),
+        testMcpOriginEnv,
+        routeForPath("/oauth/authorize"),
+      ),
+    ).toBeNull();
+    expect(
+      enforceConfiguredRouteOrigin(
+        oauthTokenRequest,
+        new URL(oauthTokenRequest.url),
+        testMcpOriginEnv,
+        routeForPath("/oauth/token"),
+      ),
+    ).toBeNull();
+    expect(
+      enforceConfiguredRouteOrigin(apiMcpRequest, new URL(apiMcpRequest.url), testApiOriginEnv, routeForPath("/mcp"))
+        ?.status,
+    ).toBe(404);
+    expect(
+      enforceConfiguredRouteOrigin(
+        previewMcpRequest,
+        new URL(previewMcpRequest.url),
+        testPreviewOriginEnv,
+        routeForPath("/mcp"),
+      )
         ?.status,
     ).toBe(404);
   });
 
   it("hides the wrong route surface on each production worker", () => {
-    const previewPublishRequest = new Request("https://html.glean-share.workers.dev/v1/html-previews");
-    const apiPreviewRequest = new Request("https://html-api.glean-share.workers.dev/p/abc123");
-    const mcpPreviewRequest = new Request("https://html-mcp.glean-share.workers.dev/p/abc123");
+    const previewPublishRequest = requestOn(testPreviewOriginEnv.PUBLIC_BASE_URL, "/v1/html-previews");
+    const apiPreviewRequest = requestOn(testApiOriginEnv.API_BASE_URL, "/p/abc123");
+    const mcpPreviewRequest = requestOn(testMcpOriginEnv.MCP_BASE_URL, "/p/abc123");
 
     expect(
       enforceConfiguredRouteOrigin(
         previewPublishRequest,
         new URL(previewPublishRequest.url),
-        previewEnv,
+        testPreviewOriginEnv,
         routeForPath("/v1/html-previews"),
       )?.status,
     ).toBe(404);
     expect(
-      enforceConfiguredRouteOrigin(apiPreviewRequest, new URL(apiPreviewRequest.url), apiEnv, routeForPath("/p/abc123"))
-        ?.status,
+      enforceConfiguredRouteOrigin(
+        apiPreviewRequest,
+        new URL(apiPreviewRequest.url),
+        testApiOriginEnv,
+        routeForPath("/p/abc123"),
+      )?.status,
     ).toBe(404);
     expect(
       enforceConfiguredRouteOrigin(
         mcpPreviewRequest,
         new URL(mcpPreviewRequest.url),
-        mcpEnv,
+        testMcpOriginEnv,
         routeForPath("/p/abc123"),
       )?.status,
     ).toBe(404);
   });
 
   it("returns preview links from the preview origin even when publishing through the API origin", () => {
-    const request = new Request("https://html-api.glean-share.workers.dev/v1/html-previews");
+    const request = requestOn(testApiOriginEnv.API_BASE_URL, "/v1/html-previews");
 
-    expect(publicBaseUrl(apiEnv, new URL(request.url), request)).toBe("https://html.glean-share.workers.dev");
+    expect(publicBaseUrl(testApiOriginEnv, new URL(request.url), request)).toBe(testApiOriginEnv.PUBLIC_BASE_URL);
   });
 
   it("fails closed when API and preview origins are configured to the same host", () => {
-    const request = new Request("https://html.glean-share.workers.dev/v1/html-previews");
+    const sameOrigin = "https://same-origin.example.test";
+    const request = requestOn(sameOrigin, "/v1/html-previews");
 
     expect(() =>
       enforceConfiguredRouteOrigin(
@@ -111,8 +145,8 @@ describe("route origin policy", () => {
         new URL(request.url),
         {
           WORKER_ROLE: "api",
-          API_BASE_URL: "https://html.glean-share.workers.dev",
-          PUBLIC_BASE_URL: "https://html.glean-share.workers.dev",
+          API_BASE_URL: sameOrigin,
+          PUBLIC_BASE_URL: sameOrigin,
         },
         routeForPath("/v1/html-previews"),
       ),

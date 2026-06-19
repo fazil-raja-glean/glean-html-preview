@@ -1,0 +1,252 @@
+import { HttpError, jsonResponse } from "./http";
+import {
+  configuredOAuthClient,
+  isValidOAuthClient,
+  isValidOAuthClientId,
+  parseClientCredentials,
+} from "./oauth-client";
+import {
+  mcpOAuthConfig,
+  mcpOAuthPublicConfig,
+  mcpOAuthTokenConfig,
+  requestedScope,
+  scopeErrorDescription,
+  validatedRedirectUri,
+  type McpOAuthEnv,
+  type McpOAuthPublicConfig,
+} from "./oauth-config";
+import {
+  exchangeAuthorizationCodeGrant,
+  issueAccessToken,
+  issueAuthorizationCode,
+  parseCodeChallengeMethod,
+  verifyAccessToken,
+} from "./oauth-token";
+
+export type { McpOAuthEnv } from "./oauth-config";
+
+export function handleOAuthAuthorizationServerMetadata(request: Request, env: McpOAuthEnv): Response {
+  const config = mcpOAuthPublicConfig(request, env);
+
+  return jsonResponse({
+    issuer: config.issuer,
+    authorization_endpoint: new URL("/oauth/authorize", config.issuer).toString(),
+    token_endpoint: new URL("/oauth/token", config.issuer).toString(),
+    grant_types_supported: ["authorization_code", "client_credentials"],
+    token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post", "none"],
+    scopes_supported: config.scopes,
+    response_types_supported: ["code"],
+    code_challenge_methods_supported: ["S256"],
+  });
+}
+
+export function handleOAuthProtectedResourceMetadata(request: Request, env: McpOAuthEnv): Response {
+  const config = mcpOAuthPublicConfig(request, env);
+
+  return jsonResponse({
+    resource: config.resource,
+    authorization_servers: [config.issuer],
+    bearer_methods_supported: ["header"],
+    scopes_supported: config.scopes,
+  });
+}
+
+export async function handleOAuthAuthorizeRequest(request: Request, env: McpOAuthEnv): Promise<Response> {
+  const config = mcpOAuthConfig(request, env);
+  const requestUrl = new URL(request.url);
+  const responseType = requestUrl.searchParams.get("response_type");
+  if (responseType !== "code") {
+    return oauthErrorResponse(400, "unsupported_response_type", "Only code response_type is supported");
+  }
+
+  const clientId = requestUrl.searchParams.get("client_id");
+  if (!clientId || !isValidOAuthClientId(clientId, config)) {
+    return oauthErrorResponse(400, "invalid_client", "Invalid OAuth client_id");
+  }
+  const oauthClient = configuredOAuthClient(clientId, config);
+
+  const redirectUri = validatedRedirectUri(requestUrl.searchParams.get("redirect_uri"), config);
+  if (!redirectUri) {
+    return oauthErrorResponse(400, "invalid_request", "redirect_uri is required");
+  }
+
+  const scope = requestedScope(requestUrl.searchParams.get("scope"), config);
+  if (!scope) {
+    return redirectWithOAuthError(redirectUri, "invalid_scope", scopeErrorDescription(config), requestUrl);
+  }
+
+  const codeChallenge = optionalQueryString(requestUrl.searchParams.get("code_challenge"));
+  const codeChallengeMethod = parseCodeChallengeMethod(requestUrl.searchParams.get("code_challenge_method"));
+  if (!codeChallenge && oauthClient?.kind === "public") {
+    return redirectWithOAuthError(redirectUri, "invalid_request", "code_challenge is required", requestUrl);
+  }
+
+  if (codeChallengeMethod !== "S256" && oauthClient?.kind === "public") {
+    return redirectWithOAuthError(redirectUri, "invalid_request", "code_challenge_method must be S256", requestUrl);
+  }
+
+  if ((codeChallenge || requestUrl.searchParams.has("code_challenge_method")) && !codeChallengeMethod) {
+    return redirectWithOAuthError(
+      redirectUri,
+      "invalid_request",
+      "code_challenge_method must be S256",
+      requestUrl,
+    );
+  }
+
+  const code = await issueAuthorizationCode(config, {
+    clientId,
+    redirectUri,
+    scope,
+    ...(codeChallenge ? { codeChallenge, codeChallengeMethod: codeChallengeMethod ?? "plain" } : {}),
+  });
+
+  return redirectWithCode(redirectUri, code, requestUrl);
+}
+
+export async function handleOAuthTokenRequest(request: Request, env: McpOAuthEnv): Promise<Response> {
+  const config = mcpOAuthConfig(request, env);
+  const form = await readFormBody(request);
+  const grantType = form.get("grant_type");
+  if (grantType !== "client_credentials" && grantType !== "authorization_code") {
+    return oauthErrorResponse(400, "unsupported_grant_type", "Only authorization_code and client_credentials are supported");
+  }
+
+  const client = parseClientCredentials(request, form);
+  if (!client) {
+    return oauthErrorResponse(401, "invalid_client", "Missing OAuth client credentials", {
+      "WWW-Authenticate": 'Basic realm="html-sharing-oauth"',
+    });
+  }
+
+  if (!isValidOAuthClient(client, config)) {
+    return oauthErrorResponse(401, "invalid_client", "Invalid OAuth client credentials", {
+      "WWW-Authenticate": 'Basic realm="html-sharing-oauth", error="invalid_client"',
+    });
+  }
+  const oauthClient = configuredOAuthClient(client.clientId, config);
+  if (grantType === "client_credentials" && oauthClient?.kind === "public") {
+    return oauthErrorResponse(400, "unauthorized_client", "Public clients cannot use client_credentials");
+  }
+
+  const codeResult =
+    grantType === "authorization_code" ? await exchangeAuthorizationCodeGrant(config, form, client.clientId) : null;
+  if (codeResult && !codeResult.valid) {
+    return oauthErrorResponse(400, codeResult.error, codeResult.description);
+  }
+
+  const requestedResource = form.get("resource");
+  if (requestedResource && requestedResource !== config.resource) {
+    return oauthErrorResponse(400, "invalid_target", "Requested resource is not this MCP server");
+  }
+
+  const scope = codeResult?.scope ?? requestedScope(form.get("scope"), config);
+  if (!scope) {
+    return oauthErrorResponse(400, "invalid_scope", scopeErrorDescription(config));
+  }
+
+  return jsonResponse({
+    access_token: await issueAccessToken(config, client.clientId, scope),
+    token_type: "Bearer",
+    expires_in: config.accessTokenTtlSeconds,
+    scope,
+  });
+}
+
+export async function requireMcpOAuthAccessToken(request: Request, env: McpOAuthEnv): Promise<void> {
+  const config = mcpOAuthTokenConfig(request, env);
+  const authorization = request.headers.get("Authorization");
+  const prefix = "Bearer ";
+  if (!authorization?.startsWith(prefix)) {
+    throw new HttpError(401, "unauthorized", "Missing OAuth bearer token", {
+      headers: mcpBearerChallenge(config),
+    });
+  }
+
+  const token = authorization.slice(prefix.length).trim();
+  const result = await verifyAccessToken(token, config);
+  if (!result.valid) {
+    throw new HttpError(401, "invalid_token", result.message, {
+      headers: mcpBearerChallenge(config, "invalid_token"),
+    });
+  }
+}
+
+async function readFormBody(request: Request): Promise<URLSearchParams> {
+  const contentType = request.headers.get("Content-Type") ?? "";
+  if (!contentType.toLowerCase().includes("application/x-www-form-urlencoded")) {
+    throw new HttpError(400, "invalid_request", "OAuth token requests must be form encoded");
+  }
+
+  return new URLSearchParams(await request.text());
+}
+
+function optionalQueryString(value: string | null): string | undefined {
+  return value && value.trim() !== "" ? value : undefined;
+}
+
+function mcpBearerChallenge(config: McpOAuthPublicConfig, error?: string): HeadersInit {
+  const metadataUrl = new URL("/.well-known/oauth-protected-resource", config.issuer).toString();
+  const params = [`resource_metadata="${metadataUrl}"`];
+  if (error) {
+    params.push(`error="${error}"`);
+  }
+
+  return {
+    "WWW-Authenticate": `Bearer ${params.join(", ")}`,
+  };
+}
+
+function oauthErrorResponse(
+  status: number,
+  error: string,
+  errorDescription: string,
+  headers: HeadersInit = {},
+): Response {
+  return jsonResponse(
+    {
+      error,
+      error_description: errorDescription,
+    },
+    status,
+    headers,
+  );
+}
+
+function redirectWithCode(redirectUri: string, code: string, requestUrl: URL): Response {
+  const redirect = new URL(redirectUri);
+  redirect.searchParams.set("code", code);
+  const state = requestUrl.searchParams.get("state");
+  if (state) {
+    redirect.searchParams.set("state", state);
+  }
+
+  return noStoreRedirect(redirect);
+}
+
+function redirectWithOAuthError(
+  redirectUri: string,
+  error: string,
+  errorDescription: string,
+  requestUrl: URL,
+): Response {
+  const redirect = new URL(redirectUri);
+  redirect.searchParams.set("error", error);
+  redirect.searchParams.set("error_description", errorDescription);
+  const state = requestUrl.searchParams.get("state");
+  if (state) {
+    redirect.searchParams.set("state", state);
+  }
+
+  return noStoreRedirect(redirect);
+}
+
+function noStoreRedirect(location: URL): Response {
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: location.toString(),
+      "Cache-Control": "no-store",
+    },
+  });
+}

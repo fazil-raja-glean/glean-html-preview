@@ -3,6 +3,8 @@ import { requirePublishAdminAccess } from "./admin-auth";
 import { enforceEdgeRateLimit } from "./edge-rate-limit";
 import { HttpError, errorResponse, jsonResponse, methodNotAllowed, readJsonObject, requireBearerToken } from "./http";
 import { INTERNAL_PUBLISH_SERVICE_TOKEN_HEADER, handleMcpRequest } from "./mcp";
+import type { McpOAuthEnv } from "./oauth-config";
+import { handleOAuthRoute } from "./oauth-router";
 import { enforceConfiguredRouteOrigin, isLocalDevelopmentRequest, publicBaseUrl } from "./origin-policy";
 import { routeForPath } from "./routes";
 import {
@@ -14,13 +16,12 @@ import {
   verifyPassword,
 } from "./security";
 
-interface Env {
+interface Env extends McpOAuthEnv {
   HTML_PREVIEWS: R2Bucket;
   PREVIEW_DB: D1Database;
   EDGE_ACCESS_RATE_LIMITER?: RateLimit;
   EDGE_MCP_RATE_LIMITER?: RateLimit;
   EDGE_PUBLISH_RATE_LIMITER?: RateLimit;
-  MCP_API_TOKEN: string;
   PUBLISH_API_TOKEN: string;
   PUBLISH_INTERNAL_SERVICE_TOKEN?: string;
   PUBLISH_ACCESS_TEAM_DOMAIN?: string;
@@ -29,7 +30,6 @@ interface Env {
   COOKIE_SIGNING_SECRET: string;
   PASSWORD_PEPPER: string;
   API_BASE_URL?: string;
-  MCP_BASE_URL?: string;
   PUBLIC_BASE_URL?: string;
   WORKER_ROLE?: string;
   PUBLISHER_EMAIL_DOMAIN?: string;
@@ -173,6 +173,8 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
 
       return handleMcpRequest(request, env);
     }
+    case "oauth":
+      return handleOAuthRoute(request, env, route.action);
     case "unpublish":
       if (request.method !== "POST") {
         return methodNotAllowed();
@@ -824,7 +826,12 @@ export function resolveApiActorEmail(env: Pick<Env, "TRUSTED_PUBLISHER_EMAIL" | 
     throw new HttpError(500, "missing_publisher_identity", "Trusted publisher identity is not configured");
   }
 
-  validatePublisherEmail(email, env.PUBLISHER_EMAIL_DOMAIN ?? "glean.com");
+  const domain = env.PUBLISHER_EMAIL_DOMAIN?.trim().toLowerCase();
+  if (!domain) {
+    throw new HttpError(500, "missing_publisher_email_domain", "Publisher email domain is not configured");
+  }
+
+  validatePublisherEmail(email, domain);
   return email;
 }
 

@@ -1,7 +1,7 @@
-import { HttpError, jsonResponse, requireBearerToken } from "./http";
+import { HttpError, jsonResponse } from "./http";
+import { type McpOAuthEnv, requireMcpOAuthAccessToken } from "./oauth";
 
-interface McpEnv {
-  MCP_API_TOKEN: string;
+interface McpEnv extends McpOAuthEnv {
   PUBLISH_API?: Fetcher;
   API_BASE_URL?: string;
   PUBLISH_API_TOKEN?: string;
@@ -40,10 +40,7 @@ const PUBLISH_TOOL_NAME = "publish_html_preview";
 export const INTERNAL_PUBLISH_SERVICE_TOKEN_HEADER = "X-Publish-Internal-Service-Token";
 
 export async function handleMcpRequest(request: Request, env: McpEnv): Promise<Response> {
-  requireBearerToken(request, env.MCP_API_TOKEN, {
-    missingCode: "missing_mcp_api_token",
-    missingMessage: "MCP API token is not configured",
-  });
+  await requireMcpOAuthAccessToken(request, env);
 
   const payload = await readJsonRpcPayload(request);
   const inputs = Array.isArray(payload) ? payload : [payload];

@@ -3,21 +3,24 @@ import { constantTimeEqual } from "./encoding";
 export class HttpError extends Error {
   readonly status: number;
   readonly code: string;
+  readonly headers?: HeadersInit;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, options: { headers?: HeadersInit } = {}) {
     super(message);
     this.status = status;
     this.code = code;
+    this.headers = options.headers;
   }
 }
 
-export function jsonResponse(value: unknown, status = 200): Response {
+export function jsonResponse(value: unknown, status = 200, headers: HeadersInit = {}): Response {
+  const responseHeaders = new Headers(headers);
+  responseHeaders.set("Content-Type", "application/json; charset=utf-8");
+  responseHeaders.set("Cache-Control", "no-store");
+
   return new Response(JSON.stringify(value, null, 2), {
     status,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": "no-store",
-    },
+    headers: responseHeaders,
   });
 }
 
@@ -31,6 +34,7 @@ export function errorResponse(error: unknown): Response {
         },
       },
       error.status,
+      error.headers,
     );
   }
 
