@@ -56,7 +56,7 @@ describe("MCP endpoint", () => {
       issuer: "http://localhost:8787",
       authorization_endpoint: "http://localhost:8787/oauth/authorize",
       token_endpoint: "http://localhost:8787/oauth/token",
-      grant_types_supported: ["authorization_code", "client_credentials"],
+      grant_types_supported: ["authorization_code", "client_credentials", "refresh_token"],
       scopes_supported: [oauthScope],
     });
 
@@ -92,9 +92,24 @@ describe("MCP endpoint", () => {
       redirect_uri: oauthRedirectUri,
     });
     expect(token.status).toBe(200);
-    const body = (await token.json()) as { access_token?: string; email?: string };
+    const body = (await token.json()) as { access_token?: string; refresh_token?: string; email?: string };
     expect(body.access_token).toBeTypeOf("string");
+    expect(body.refresh_token).toBeTypeOf("string");
     expect(jwtPayload(body.access_token as string)).toMatchObject({
+      email: oauthActorEmail,
+      sub: oauthClientId,
+    });
+
+    const refreshed = await requestAccessTokenResponse(undefined, {}, {
+      grant_type: "refresh_token",
+      refresh_token: body.refresh_token as string,
+      resource: "http://localhost:8787/mcp",
+    });
+    expect(refreshed.status).toBe(200);
+    const refreshedBody = (await refreshed.json()) as { access_token?: string; refresh_token?: string };
+    expect(refreshedBody.access_token).toBeTypeOf("string");
+    expect(refreshedBody.refresh_token).toBeTypeOf("string");
+    expect(jwtPayload(refreshedBody.access_token as string)).toMatchObject({
       email: oauthActorEmail,
       sub: oauthClientId,
     });
@@ -185,6 +200,35 @@ describe("MCP endpoint", () => {
       sub: cursorClientId,
     });
     expect(initialized.status).toBe(200);
+  });
+
+  it("refreshes public PKCE OAuth clients without a client secret", async () => {
+    const codexToken = await requestPublicAuthorizationCodeToken(codexClientId, codexRedirectUri);
+    expect(codexToken.refresh_token).toBeTypeOf("string");
+
+    const refreshed = await worker.fetch(
+      new Request("http://localhost:8787/oauth/token", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          client_id: codexClientId,
+          refresh_token: codexToken.refresh_token as string,
+          resource: "http://localhost:8787/mcp",
+        }),
+      }),
+      mcpEnv as never,
+    );
+    expect(refreshed.status).toBe(200);
+    const refreshedBody = (await refreshed.json()) as { access_token?: string; refresh_token?: string };
+    expect(refreshedBody.access_token).toBeTypeOf("string");
+    expect(refreshedBody.refresh_token).toBeTypeOf("string");
+    expect(jwtPayload(refreshedBody.access_token as string)).toMatchObject({
+      email: oauthActorEmail,
+      sub: codexClientId,
+    });
   });
 
   it("does not let public OAuth clients use client credentials", async () => {
@@ -580,6 +624,15 @@ async function requestAccessTokenResponse(
 }
 
 async function requestPublicAuthorizationCodeAccessToken(clientId: string, redirectUri: string): Promise<string> {
+  const body = await requestPublicAuthorizationCodeToken(clientId, redirectUri);
+  expect(body.access_token).toBeTypeOf("string");
+  return body.access_token as string;
+}
+
+async function requestPublicAuthorizationCodeToken(
+  clientId: string,
+  redirectUri: string,
+): Promise<{ access_token?: string; refresh_token?: string; scope?: string }> {
   const codeVerifier = `verifier-${clientId}`;
   const codeChallenge = await s256CodeChallenge(codeVerifier);
   const authorizeUrl = new URL("http://localhost:8787/oauth/authorize");
@@ -615,10 +668,11 @@ async function requestPublicAuthorizationCodeAccessToken(clientId: string, redir
     mcpEnv as never,
   );
   expect(token.status).toBe(200);
-  const body = (await token.json()) as { access_token?: string; scope?: string };
+  const body = (await token.json()) as { access_token?: string; refresh_token?: string; scope?: string };
   expect(body.scope).toBe(oauthScope);
   expect(body.access_token).toBeTypeOf("string");
-  return body.access_token as string;
+  expect(body.refresh_token).toBeTypeOf("string");
+  return body;
 }
 
 function jwtPayload(token: string): Record<string, unknown> {

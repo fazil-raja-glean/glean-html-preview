@@ -44,7 +44,7 @@ Do not commit real secrets. `.env`, `.dev.vars`, `.wrangler/`, and `node_modules
 | `MCP_OAUTH_CLIENT_SECRET` | no | no | yes | yes |
 | `MCP_OAUTH_TOKEN_SECRET` | no | no | yes | no |
 
-`PUBLISH_ACCESS_TEAM_DOMAIN`, `PUBLISH_ACCESS_AUD`, `MCP_OAUTH_ALLOWED_REDIRECT_URIS`, `MCP_OAUTH_PUBLIC_CLIENT_IDS`, `MCP_OAUTH_SCOPES`, Worker names, R2 bucket names, D1 IDs, and rate-limit namespace IDs are configuration, not bearer secrets. They can live in `wrangler.toml`.
+`PUBLISH_ACCESS_TEAM_DOMAIN`, `PUBLISH_ACCESS_AUD`, `MCP_OAUTH_ALLOWED_REDIRECT_URIS`, `MCP_OAUTH_PUBLIC_CLIENT_IDS`, `MCP_OAUTH_SCOPES`, `MCP_OAUTH_REFRESH_TOKEN_TTL_SECONDS`, Worker names, R2 bucket names, D1 IDs, and rate-limit namespace IDs are configuration, not bearer secrets. They can live in `wrangler.toml`.
 
 ## Deploy MCP From Scratch
 
@@ -125,7 +125,7 @@ MCP_OAUTH_ACCESS_AUD = "<mcp-oauth-access-application-aud-tag>"
 MCP_OAUTH_ALLOWED_EMAIL_DOMAIN = "glean.com"
 ```
 
-When Glean, Codex, Claude Code, or Cursor starts the authorization-code flow, the browser signs in through Cloudflare Access. The Worker verifies the Access JWT, binds the verified user email into the OAuth code and access token, and records that email as the preview publisher.
+When Glean, Codex, Claude Code, or Cursor starts the authorization-code flow, the browser signs in through Cloudflare Access. The Worker verifies the Access JWT, binds the verified user email into the OAuth code, access token, and refresh token, and records that email as the preview publisher.
 
 ### 6. Generate production tokens
 
@@ -339,7 +339,10 @@ Codex, Claude Code, and Cursor should use public OAuth clients with S256 PKCE. C
 MCP_OAUTH_PUBLIC_CLIENT_IDS = "codex-html-sharing-mcp,claude-code-html-sharing-mcp,cursor-html-sharing-mcp"
 MCP_OAUTH_ALLOWED_REDIRECT_URIS = "https://your-glean-callback.example.com/oauth/callback,http://127.0.0.1:5555/callback,http://localhost:5555/callback,cursor://anysphere.cursor-mcp/oauth/callback"
 MCP_OAUTH_REQUIRE_USER_AUTH = "true"
+MCP_OAUTH_REFRESH_TOKEN_TTL_SECONDS = "2592000"
 ```
+
+Authorization-code logins return refresh tokens so Glean and coding clients can keep the MCP connection alive without hourly re-auth. `client_credentials` tokens remain access-token-only and should be used only for setup, handshake, and tool discovery.
 
 For Codex, use a fixed callback URL so the Worker can allow-list it:
 
@@ -412,6 +415,7 @@ MCP_OAUTH_REQUIRE_USER_AUTH=true
 MCP_OAUTH_LOCAL_BYPASS_EMAIL=html-sharing@example.com
 MCP_OAUTH_ALLOWED_EMAIL_DOMAIN=example.com
 MCP_OAUTH_SCOPES=mcp:tools
+MCP_OAUTH_REFRESH_TOKEN_TTL_SECONDS=2592000
 MCP_OAUTH_CLIENT_SECRET=$LOCAL_MCP_OAUTH_CLIENT_SECRET
 MCP_OAUTH_TOKEN_SECRET=$LOCAL_MCP_OAUTH_TOKEN_SECRET
 PUBLISH_ADMIN_LOCAL_BYPASS_SECRET=$LOCAL_ADMIN_BYPASS_SECRET

@@ -12,6 +12,7 @@ export interface McpOAuthEnv {
   MCP_OAUTH_CLIENT_SECRET?: string;
   MCP_OAUTH_LOCAL_BYPASS_EMAIL?: string;
   MCP_OAUTH_PUBLIC_CLIENT_IDS?: string;
+  MCP_OAUTH_REFRESH_TOKEN_TTL_SECONDS?: string;
   MCP_OAUTH_REQUIRE_USER_AUTH?: string;
   MCP_OAUTH_SCOPES?: string;
   MCP_OAUTH_TOKEN_SECRET?: string;
@@ -42,6 +43,7 @@ export interface McpOAuthConfig extends McpOAuthPublicConfig {
   accessTokenTtlSeconds: number;
   allowedRedirectUris: string[];
   clients: McpOAuthClient[];
+  refreshTokenTtlSeconds: number;
   tokenSecret: string;
 }
 
@@ -51,8 +53,10 @@ export interface McpOAuthTokenConfig extends McpOAuthPublicConfig {
 }
 
 const DEFAULT_ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
+const DEFAULT_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 const DEFAULT_SCOPE = "mcp:tools";
 const MAX_ACCESS_TOKEN_TTL_SECONDS = 24 * 60 * 60;
+const MAX_REFRESH_TOKEN_TTL_SECONDS = 90 * 24 * 60 * 60;
 const CURSOR_MCP_REDIRECT_URI = "cursor://anysphere.cursor-mcp/oauth/callback";
 
 export function mcpOAuthPublicConfig(request: Request, env: McpOAuthEnv): McpOAuthPublicConfig {
@@ -72,6 +76,7 @@ export function mcpOAuthConfig(request: Request, env: McpOAuthEnv): McpOAuthConf
     accessTokenTtlSeconds: accessTokenTtlSeconds(env),
     allowedRedirectUris: allowedRedirectUris(env),
     clients: configuredClients(env),
+    refreshTokenTtlSeconds: refreshTokenTtlSeconds(env),
   };
 }
 
@@ -266,6 +271,23 @@ function accessTokenTtlSeconds(env: Pick<McpOAuthEnv, "MCP_OAUTH_ACCESS_TOKEN_TT
       500,
       "invalid_mcp_oauth_access_token_ttl_seconds",
       "MCP_OAUTH_ACCESS_TOKEN_TTL_SECONDS must be between 60 and 86400",
+    );
+  }
+
+  return value;
+}
+
+function refreshTokenTtlSeconds(env: Pick<McpOAuthEnv, "MCP_OAUTH_REFRESH_TOKEN_TTL_SECONDS">): number {
+  if (!env.MCP_OAUTH_REFRESH_TOKEN_TTL_SECONDS) {
+    return DEFAULT_REFRESH_TOKEN_TTL_SECONDS;
+  }
+
+  const value = Number(env.MCP_OAUTH_REFRESH_TOKEN_TTL_SECONDS);
+  if (!Number.isInteger(value) || value < 3600 || value > MAX_REFRESH_TOKEN_TTL_SECONDS) {
+    throw new HttpError(
+      500,
+      "invalid_mcp_oauth_refresh_token_ttl_seconds",
+      "MCP_OAUTH_REFRESH_TOKEN_TTL_SECONDS must be between 3600 and 7776000",
     );
   }
 

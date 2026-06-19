@@ -17,9 +17,11 @@ import {
   type McpOAuthPublicConfig,
 } from "./oauth-config";
 import {
+  exchangeRefreshTokenGrant,
   exchangeAuthorizationCodeGrant,
   issueAccessToken,
   issueAuthorizationCode,
+  issueRefreshToken,
   parseCodeChallengeMethod,
   verifyAccessToken,
 } from "./oauth-token";
@@ -39,7 +41,7 @@ export function handleOAuthAuthorizationServerMetadata(request: Request, env: Mc
     issuer: config.issuer,
     authorization_endpoint: new URL("/oauth/authorize", config.issuer).toString(),
     token_endpoint: new URL("/oauth/token", config.issuer).toString(),
-    grant_types_supported: ["authorization_code", "client_credentials"],
+    grant_types_supported: ["authorization_code", "client_credentials", "refresh_token"],
     token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post", "none"],
     scopes_supported: config.scopes,
     response_types_supported: ["code"],
@@ -116,8 +118,12 @@ export async function handleOAuthTokenRequest(request: Request, env: McpOAuthEnv
   const config = mcpOAuthConfig(request, env);
   const form = await readFormBody(request);
   const grantType = form.get("grant_type");
-  if (grantType !== "client_credentials" && grantType !== "authorization_code") {
-    return oauthErrorResponse(400, "unsupported_grant_type", "Only authorization_code and client_credentials are supported");
+  if (grantType !== "client_credentials" && grantType !== "authorization_code" && grantType !== "refresh_token") {
+    return oauthErrorResponse(
+      400,
+      "unsupported_grant_type",
+      "Only authorization_code, client_credentials, and refresh_token are supported",
+    );
   }
 
   const client = parseClientCredentials(request, form);
@@ -143,21 +149,31 @@ export async function handleOAuthTokenRequest(request: Request, env: McpOAuthEnv
     return oauthErrorResponse(400, codeResult.error, codeResult.description);
   }
 
+  const refreshResult =
+    grantType === "refresh_token" ? await exchangeRefreshTokenGrant(config, form, client.clientId) : null;
+  if (refreshResult && !refreshResult.valid) {
+    return oauthErrorResponse(400, refreshResult.error, refreshResult.description);
+  }
+
   const requestedResource = form.get("resource");
   if (requestedResource && requestedResource !== config.resource) {
     return oauthErrorResponse(400, "invalid_target", "Requested resource is not this MCP server");
   }
 
-  const scope = codeResult?.scope ?? requestedScope(form.get("scope"), config);
+  const scope = codeResult?.scope ?? refreshResult?.scope ?? requestedScope(form.get("scope"), config);
   if (!scope) {
     return oauthErrorResponse(400, "invalid_scope", scopeErrorDescription(config));
   }
 
+  const actorEmail = codeResult?.actorEmail ?? refreshResult?.actorEmail;
   return jsonResponse({
-    access_token: await issueAccessToken(config, client.clientId, scope, codeResult?.actorEmail),
+    access_token: await issueAccessToken(config, client.clientId, scope, actorEmail),
     token_type: "Bearer",
     expires_in: config.accessTokenTtlSeconds,
     scope,
+    ...(grantType === "authorization_code" || grantType === "refresh_token"
+      ? { refresh_token: await issueRefreshToken(config, client.clientId, scope, actorEmail) }
+      : {}),
   });
 }
 

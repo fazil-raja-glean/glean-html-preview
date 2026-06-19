@@ -9,6 +9,7 @@ import {
 import { signJwt, verifySignedJwt } from "./oauth-jwt";
 
 interface AccessTokenPayload {
+  typ?: "access";
   iss: string;
   sub: string;
   aud: string;
@@ -32,9 +33,25 @@ interface AuthorizationCodePayload {
   codeChallengeMethod?: "plain" | "S256";
 }
 
+interface RefreshTokenPayload {
+  typ: "refresh";
+  iss: string;
+  sub: string;
+  aud: string;
+  scope: string;
+  iat: number;
+  exp: number;
+  jti: string;
+  email?: string;
+}
+
 export type CodeChallengeMethod = "plain" | "S256";
 
 export type AuthorizationCodeGrantResult =
+  | { valid: true; scope: string; actorEmail?: string }
+  | { valid: false; error: string; description: string };
+
+export type RefreshTokenGrantResult =
   | { valid: true; scope: string; actorEmail?: string }
   | { valid: false; error: string; description: string };
 
@@ -114,6 +131,32 @@ export async function exchangeAuthorizationCodeGrant(
   };
 }
 
+export async function exchangeRefreshTokenGrant(
+  config: McpOAuthConfig,
+  form: URLSearchParams,
+  clientId: string,
+): Promise<RefreshTokenGrantResult> {
+  const refreshToken = form.get("refresh_token");
+  if (!refreshToken) {
+    return { valid: false, error: "invalid_request", description: "refresh_token is required" };
+  }
+
+  const payload = await verifyRefreshToken(refreshToken, config);
+  if (!payload) {
+    return { valid: false, error: "invalid_grant", description: "Invalid refresh token" };
+  }
+
+  if (!constantTimeEqual(payload.sub, clientId)) {
+    return { valid: false, error: "invalid_grant", description: "Refresh token client is invalid" };
+  }
+
+  return {
+    valid: true,
+    scope: payload.scope,
+    ...(payload.email ? { actorEmail: payload.email } : {}),
+  };
+}
+
 export async function issueAccessToken(
   config: McpOAuthConfig,
   clientId: string,
@@ -123,6 +166,7 @@ export async function issueAccessToken(
   const now = Math.floor(Date.now() / 1000);
   return signJwt(
     {
+      typ: "access",
       iss: config.issuer,
       sub: clientId,
       client_id: clientId,
@@ -130,6 +174,30 @@ export async function issueAccessToken(
       scope,
       iat: now,
       exp: now + config.accessTokenTtlSeconds,
+      jti: randomBase64Url(16),
+      ...(actorEmail ? { email: actorEmail } : {}),
+    },
+    config.tokenSecret,
+  );
+}
+
+export async function issueRefreshToken(
+  config: McpOAuthConfig,
+  clientId: string,
+  scope: string,
+  actorEmail?: string,
+): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  return signJwt(
+    {
+      typ: "refresh",
+      iss: config.issuer,
+      sub: clientId,
+      client_id: clientId,
+      aud: config.resource,
+      scope,
+      iat: now,
+      exp: now + config.refreshTokenTtlSeconds,
       jti: randomBase64Url(16),
       ...(actorEmail ? { email: actorEmail } : {}),
     },
@@ -157,6 +225,10 @@ export async function verifyAccessToken(
 
   if (payload.aud !== config.resource) {
     return { valid: false, message: "OAuth bearer token audience is invalid" };
+  }
+
+  if (payload.typ !== undefined && payload.typ !== "access") {
+    return { valid: false, message: "OAuth bearer token type is invalid" };
   }
 
   if (!isValidAccessTokenClientId(payload.sub, config)) {
@@ -192,8 +264,59 @@ async function verifyAuthorizationCode(code: string, config: McpOAuthConfig): Pr
   return payload.exp > now && payload.iss === config.issuer ? payload : null;
 }
 
+async function verifyRefreshToken(token: string, config: McpOAuthConfig): Promise<RefreshTokenPayload | null> {
+  const payload = await verifySignedJwt(token, config.tokenSecret, parseRefreshTokenPayload);
+  if (!payload) {
+    return null;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (payload.exp <= now || payload.iss !== config.issuer || payload.aud !== config.resource) {
+    return null;
+  }
+
+  return accessTokenHasSupportedScope(payload.scope, config) ? payload : null;
+}
+
 function parseAccessTokenPayload(value: Record<string, unknown>): AccessTokenPayload | null {
   if (
+    typeof value.iss !== "string" ||
+    typeof value.sub !== "string" ||
+    typeof value.aud !== "string" ||
+    typeof value.scope !== "string" ||
+    typeof value.iat !== "number" ||
+    typeof value.exp !== "number" ||
+    typeof value.jti !== "string" ||
+    !Number.isInteger(value.iat) ||
+    !Number.isInteger(value.exp)
+  ) {
+    return null;
+  }
+
+  if (value.typ !== undefined && value.typ !== "access") {
+    return null;
+  }
+
+  if (value.email !== undefined && typeof value.email !== "string") {
+    return null;
+  }
+
+  return {
+    ...(value.typ ? { typ: value.typ } : {}),
+    iss: value.iss,
+    sub: value.sub,
+    aud: value.aud,
+    scope: value.scope,
+    iat: value.iat,
+    exp: value.exp,
+    jti: value.jti,
+    ...(value.email ? { email: value.email } : {}),
+  };
+}
+
+function parseRefreshTokenPayload(value: Record<string, unknown>): RefreshTokenPayload | null {
+  if (
+    value.typ !== "refresh" ||
     typeof value.iss !== "string" ||
     typeof value.sub !== "string" ||
     typeof value.aud !== "string" ||
@@ -212,6 +335,7 @@ function parseAccessTokenPayload(value: Record<string, unknown>): AccessTokenPay
   }
 
   return {
+    typ: value.typ,
     iss: value.iss,
     sub: value.sub,
     aud: value.aud,
