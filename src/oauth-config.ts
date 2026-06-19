@@ -109,7 +109,7 @@ export function validatedRedirectUri(value: string | null, config: McpOAuthConfi
     throw new HttpError(400, "invalid_request", "redirect_uri must be HTTPS or loopback HTTP");
   }
 
-  if (!config.allowedRedirectUris.includes(redirectUri.toString())) {
+  if (!isAllowedRedirectUri(redirectUri, config.allowedRedirectUris)) {
     throw new HttpError(400, "invalid_request", "redirect_uri is not allowed");
   }
 
@@ -277,4 +277,28 @@ function isAllowedRedirectProtocol(redirectUri: URL): boolean {
 
 function isLoopbackHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
+}
+
+function isAllowedRedirectUri(redirectUri: URL, allowedRedirectUris: string[]): boolean {
+  return allowedRedirectUris.some((allowedValue) => {
+    if (redirectUri.toString() === allowedValue) {
+      return true;
+    }
+
+    const allowedUrl = new URL(allowedValue);
+    if (!isLoopbackHost(redirectUri.hostname) || !isLoopbackHost(allowedUrl.hostname)) {
+      return false;
+    }
+
+    if (redirectUri.protocol !== allowedUrl.protocol || redirectUri.host !== allowedUrl.host) {
+      return false;
+    }
+
+    if (allowedUrl.search || allowedUrl.hash) {
+      return false;
+    }
+
+    const allowedPathPrefix = allowedUrl.pathname.endsWith("/") ? allowedUrl.pathname : `${allowedUrl.pathname}/`;
+    return redirectUri.pathname.startsWith(allowedPathPrefix);
+  });
 }

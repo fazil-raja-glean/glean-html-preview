@@ -8,7 +8,8 @@ const oauthClientSecret = "dev-oauth-secret";
 const codexClientId = "codex-html-sharing-mcp";
 const claudeCodeClientId = "claude-code-html-sharing-mcp";
 const oauthRedirectUri = "https://oauth-client.example.test/tools/oauth/callback";
-const codexRedirectUri = "http://127.0.0.1:5555/callback";
+const codexAllowedRedirectUri = "http://127.0.0.1:5555/callback";
+const codexRedirectUri = "http://127.0.0.1:5555/callback/UnEALRF1ZB92";
 const claudeCodeRedirectUri = "http://localhost:5555/callback";
 const oauthScope = "html-preview:publish";
 
@@ -16,7 +17,7 @@ const mcpEnv = {
   MCP_OAUTH_ALLOWED_REDIRECT_URIS: [
     oauthRedirectUri,
     "https://oauth-client.example.test/tools/oauth/alternate-callback",
-    codexRedirectUri,
+    codexAllowedRedirectUri,
     claudeCodeRedirectUri,
   ].join("\n"),
   MCP_OAUTH_CLIENT_ID: oauthClientId,
