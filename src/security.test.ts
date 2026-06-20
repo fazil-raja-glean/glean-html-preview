@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { constantTimeEqual, fromBase64Url, toBase64Url, utf8 } from "./encoding";
-import { HTML_SECURITY_HEADERS, resolveApiActorEmail } from "./index";
+import { HTML_SECURITY_HEADERS } from "./index";
+import { resolvePublishActorEmail } from "./publish-principal";
 import { hashPassword, signAccessCookie, verifyAccessCookie, verifyPassword } from "./security";
 
 describe("encoding helpers", () => {
@@ -68,7 +69,7 @@ describe("preview HTML security headers", () => {
 describe("trusted API actor identity", () => {
   it("uses the configured service identity instead of request body identity", () => {
     expect(
-      resolveApiActorEmail({
+      resolvePublishActorEmail({
         TRUSTED_PUBLISHER_EMAIL: "HTML-Sharing@Example.com",
         PUBLISHER_EMAIL_DOMAIN: "example.com",
       }),
@@ -76,14 +77,14 @@ describe("trusted API actor identity", () => {
   });
 
   it("requires a configured trusted identity and allowed domain", () => {
-    expect(() => resolveApiActorEmail({ PUBLISHER_EMAIL_DOMAIN: "example.com" })).toThrow(
+    expect(() => resolvePublishActorEmail({ PUBLISHER_EMAIL_DOMAIN: "example.com" })).toThrow(
       "Trusted publisher identity is not configured",
     );
-    expect(() => resolveApiActorEmail({ TRUSTED_PUBLISHER_EMAIL: "publisher@example.com" })).toThrow(
+    expect(() => resolvePublishActorEmail({ TRUSTED_PUBLISHER_EMAIL: "publisher@example.com" })).toThrow(
       "Publisher email domain is not configured",
     );
     expect(() =>
-      resolveApiActorEmail({
+      resolvePublishActorEmail({
         TRUSTED_PUBLISHER_EMAIL: "attacker@other.example.com",
         PUBLISHER_EMAIL_DOMAIN: "example.com",
       }),
@@ -92,7 +93,7 @@ describe("trusted API actor identity", () => {
 
   it("allows forks to configure their own trusted publisher domain", () => {
     expect(
-      resolveApiActorEmail({
+      resolvePublishActorEmail({
         TRUSTED_PUBLISHER_EMAIL: "Publisher@Internal.example",
         PUBLISHER_EMAIL_DOMAIN: "internal.example",
       }),
@@ -101,7 +102,7 @@ describe("trusted API actor identity", () => {
 
   it("uses a verified request actor when provided", () => {
     expect(
-      resolveApiActorEmail(
+      resolvePublishActorEmail(
         {
           TRUSTED_PUBLISHER_EMAIL: "service@example.com",
           PUBLISHER_EMAIL_DOMAIN: "example.com",

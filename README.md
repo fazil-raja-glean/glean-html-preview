@@ -24,7 +24,7 @@ Key rules:
 
 - Do not put publish/admin routes on the preview Worker.
 - Do not put preview routes on the API or MCP Workers.
-- Do not give the MCP Worker direct R2 or D1 bindings.
+- Do not give the MCP Worker direct R2 access. It only gets D1 for OAuth grant and refresh-token state.
 - Do not give Glean the Cloudflare Access service-token secret.
 - Do not weaken `HTML_SECURITY_HEADERS` in `src/index.ts`; the uploaded HTML must stay sandboxed.
 
@@ -127,6 +127,8 @@ MCP_OAUTH_ALLOWED_EMAIL_DOMAIN = "glean.com"
 
 When Glean, Codex, Claude Code, or Cursor starts the authorization-code flow, the browser signs in through Cloudflare Access. The Worker verifies the Access JWT, binds the verified user email into the OAuth code, access token, and refresh token, and records that email as the preview publisher.
 
+This Worker is the OAuth authorization server for the HTML-sharing MCP server. Glean's OAuth setup should point at this Worker's `/oauth/authorize` and `/oauth/token` endpoints; the repo does not import a Glean OAuth SDK. OAuth codes are consumed once in D1, and refresh tokens rotate on every refresh so old refresh tokens stop working after rotation.
+
 ### 6. Generate production tokens
 
 Generate the Worker secrets locally:
@@ -182,9 +184,9 @@ Expected dry-run shape:
 
 - Preview Worker lists `HTML_PREVIEWS`, `PREVIEW_DB`, and `EDGE_ACCESS_RATE_LIMITER`.
 - API Worker lists `HTML_PREVIEWS`, `PREVIEW_DB`, and `EDGE_PUBLISH_RATE_LIMITER`.
-- MCP Worker lists `PUBLISH_API` and `EDGE_MCP_RATE_LIMITER`.
-- MCP Worker does not list `HTML_PREVIEWS` or `PREVIEW_DB`.
-- Wrangler may warn that top-level R2/D1 bindings are absent from `env.mcp`; that is intentional least privilege.
+- MCP Worker lists `PUBLISH_API`, `PREVIEW_DB`, and `EDGE_MCP_RATE_LIMITER`.
+- MCP Worker does not list `HTML_PREVIEWS`.
+- Wrangler may warn that top-level R2 bindings are absent from `env.mcp`; that is intentional least privilege.
 
 Deploy:
 
@@ -236,7 +238,32 @@ ACCESS_TOKEN="$(
 Authorization-code login smoke test, matching Glean, Codex, Claude Code, and Cursor user OAuth:
 
 ```sh
-open "$(node -e 'const [base, clientId, redirectUri, scope] = process.argv.slice(1); const url = new URL("/oauth/authorize", base); url.searchParams.set("response_type", "code"); url.searchParams.set("client_id", clientId); url.searchParams.set("redirect_uri", redirectUri); url.searchParams.set("scope", scope); console.log(url.toString())' "$MCP" "$MCP_OAUTH_CLIENT_ID" "$MCP_OAUTH_REDIRECT_URI" "$MCP_OAUTH_SCOPES")"
+AUTH_URL="$(
+  node -e 'const [base, clientId, redirectUri, scope] = process.argv.slice(1); const url = new URL("/oauth/authorize", base); url.searchParams.set("response_type", "code"); url.searchParams.set("client_id", clientId); url.searchParams.set("redirect_uri", redirectUri); url.searchParams.set("scope", scope); console.log(url.toString())' \
+    "$MCP" \
+    "$MCP_OAUTH_CLIENT_ID" \
+    "$MCP_OAUTH_REDIRECT_URI" \
+    "$MCP_OAUTH_SCOPES"
+)"
+open "$AUTH_URL"
+```
+
+After the browser redirects to `$MCP_OAUTH_REDIRECT_URI`, copy the `code` query parameter from the redirected URL. Exchange it for a user-bound token:
+
+```sh
+export OAUTH_CODE="<code-from-redirect-url>"
+
+USER_ACCESS_TOKEN="$(
+  curl -sS "$MCP/oauth/token" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    --data-urlencode 'grant_type=authorization_code' \
+    --data-urlencode "client_id=$MCP_OAUTH_CLIENT_ID" \
+    --data-urlencode "client_secret=$MCP_OAUTH_CLIENT_SECRET" \
+    --data-urlencode "code=$OAUTH_CODE" \
+    --data-urlencode "redirect_uri=$MCP_OAUTH_REDIRECT_URI" \
+    --data-urlencode "resource=$MCP/mcp" \
+    | node -e 'let data=""; process.stdin.on("data", c => data += c); process.stdin.on("end", () => console.log(JSON.parse(data).access_token));'
+)"
 ```
 
 MCP handshake and tool discovery:
@@ -262,7 +289,7 @@ Publish through MCP with a user-bound authorization-code token. `client_credenti
 
 ```sh
 curl -sS "$MCP/mcp" \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Authorization: Bearer $USER_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   --data '{
     "jsonrpc": "2.0",

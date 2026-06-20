@@ -15,6 +15,8 @@ const apiWorkerEnv = {
   ...testApiOriginEnv,
   PUBLISH_API_TOKEN: "dev-publish-token",
   PUBLISH_INTERNAL_SERVICE_TOKEN: "internal-service-token",
+  PUBLISHER_EMAIL_DOMAIN: "example.com",
+  TRUSTED_PUBLISHER_EMAIL: "service@example.com",
 } as const;
 
 describe("publish/admin access gate", () => {

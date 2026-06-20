@@ -1,11 +1,16 @@
-import { constantTimeEqual, randomBase64Url } from "./encoding";
-import { requirePublishAdminAccess } from "./admin-auth";
+import { randomBase64Url } from "./encoding";
 import { enforceEdgeRateLimit } from "./edge-rate-limit";
-import { HttpError, errorResponse, jsonResponse, methodNotAllowed, readJsonObject, requireBearerToken } from "./http";
-import { INTERNAL_PUBLISH_ACTOR_EMAIL_HEADER, INTERNAL_PUBLISH_SERVICE_TOKEN_HEADER, handleMcpRequest } from "./mcp";
+import { HttpError, errorResponse, jsonResponse, methodNotAllowed, readJsonObject } from "./http";
+import { handleMcpRequest } from "./mcp";
 import type { McpOAuthEnv } from "./oauth-config";
 import { handleOAuthRoute } from "./oauth-router";
-import { enforceConfiguredRouteOrigin, isLocalDevelopmentRequest, publicBaseUrl } from "./origin-policy";
+import { enforceConfiguredRouteOrigin, publicBaseUrl } from "./origin-policy";
+import {
+  parsePublishCommand,
+  parseRotatePasswordCommand,
+  parseUnpublishCommand,
+} from "./publish-command";
+import { requirePublishPrincipal, type PublishPrincipal } from "./publish-principal";
 import { routeForPath } from "./routes";
 import {
   createSlug,
@@ -57,27 +62,6 @@ interface PreviewRow {
   deleted_at: string | null;
 }
 
-interface PublishInput {
-  title: string;
-  html: string;
-  password: string;
-  publisherEmail: string;
-  expiresAt: string;
-  sourceUrl: string | null;
-}
-
-interface PublishAdminIdentity {
-  actorEmail: string | null;
-}
-
-interface RotatePasswordInput {
-  password: string;
-}
-
-interface UnpublishInput {
-  deleteObject: boolean;
-}
-
 interface AccessRateLimitRow {
   scope: string;
   failed_count: number;
@@ -103,8 +87,6 @@ interface AccessRateLimitBlock {
 
 const ACCESS_COOKIE_NAME = "html_preview_access";
 const ACCESS_COOKIE_TTL_SECONDS = 60 * 60 * 12;
-const DEFAULT_EXPIRES_DAYS = 60;
-const DEFAULT_MAX_HTML_BYTES = 2_000_000;
 const DEFAULT_ACCESS_RATE_LIMIT_WINDOW_SECONDS = 10 * 60;
 const DEFAULT_ACCESS_RATE_LIMIT_LOCK_SECONDS = 15 * 60;
 const DEFAULT_MAX_ACCESS_FAILURES_PER_IP = 8;
@@ -159,8 +141,8 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
         return edgeRateLimit;
       }
 
-      const identity = await requirePublishAdminRequest(request, env, url);
-      return publishPreview(request, env, url, identity.actorEmail);
+      const principal = await requirePublishPrincipal(request, env, url);
+      return publishPreview(request, env, url, principal);
     }
     case "mcp": {
       if (request.method !== "POST") {
@@ -184,16 +166,16 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
         return methodNotAllowed();
       }
 
-      const identity = await requirePublishAdminRequest(request, env, url);
-      return unpublishPreview(request, env, route.slug, identity.actorEmail);
+      const principal = await requirePublishPrincipal(request, env, url);
+      return unpublishPreview(request, env, route.slug, principal);
     }
     case "rotatePassword": {
       if (request.method !== "POST") {
         return methodNotAllowed();
       }
 
-      const identity = await requirePublishAdminRequest(request, env, url);
-      return rotatePassword(request, env, route.slug, identity.actorEmail);
+      const principal = await requirePublishPrincipal(request, env, url);
+      return rotatePassword(request, env, route.slug, principal);
     }
     case "access": {
       if (request.method !== "POST") {
@@ -231,54 +213,13 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
   );
 }
 
-async function requirePublishAdminRequest(request: Request, env: Env, url: URL): Promise<PublishAdminIdentity> {
-  requireBearerToken(request, env.PUBLISH_API_TOKEN);
-  if (hasValidInternalPublishServiceToken(request, env)) {
-    return {
-      actorEmail: internalPublishActorEmail(request, env),
-    };
-  }
-
-  const accessIdentity = await requirePublishAdminAccess(request, env, {
-    isLocalDevelopment: isLocalDevelopmentRequest(request, url),
-  });
-  return {
-    actorEmail: accessIdentity.email,
-  };
-}
-
-function hasValidInternalPublishServiceToken(
-  request: Request,
-  env: Pick<Env, "PUBLISH_INTERNAL_SERVICE_TOKEN">,
-): boolean {
-  const actualToken = request.headers.get(INTERNAL_PUBLISH_SERVICE_TOKEN_HEADER);
-  if (!actualToken) {
-    return false;
-  }
-
-  if (!env.PUBLISH_INTERNAL_SERVICE_TOKEN) {
-    throw new HttpError(500, "missing_internal_service_token", "Internal publish service token is not configured");
-  }
-
-  if (!constantTimeEqual(actualToken, env.PUBLISH_INTERNAL_SERVICE_TOKEN)) {
-    throw new HttpError(403, "invalid_internal_service_token", "Invalid internal publish service token");
-  }
-
-  return true;
-}
-
-function internalPublishActorEmail(request: Request, env: Env): string | null {
-  const actorEmail = request.headers.get(INTERNAL_PUBLISH_ACTOR_EMAIL_HEADER);
-  return actorEmail ? resolveApiActorEmail(env, actorEmail) : null;
-}
-
 async function publishPreview(
   request: Request,
   env: Env,
   url: URL,
-  actorEmail: string | null,
+  principal: PublishPrincipal,
 ): Promise<Response> {
-  const input = parsePublishInput(await readJsonObject(request), env, actorEmail);
+  const input = parsePublishCommand(await readJsonObject(request), env, principal);
   const slug = createSlug();
   const objectKey = `previews/${slug}/index.html`;
   const now = new Date().toISOString();
@@ -354,11 +295,10 @@ async function unpublishPreview(
   request: Request,
   env: Env,
   slug: string,
-  actorEmail: string | null,
+  principal: PublishPrincipal,
 ): Promise<Response> {
   const existing = await getPreview(env, slug);
-  const input = parseUnpublishInput(await readJsonObject(request));
-  const resolvedActorEmail = resolveApiActorEmail(env, actorEmail ?? undefined);
+  const input = parseUnpublishCommand(await readJsonObject(request));
   const deletedAt = new Date().toISOString();
 
   await env.PREVIEW_DB.prepare("UPDATE previews SET deleted_at = ? WHERE slug = ? AND deleted_at IS NULL")
@@ -372,7 +312,7 @@ async function unpublishPreview(
   await recordAudit(env, {
     slug,
     eventType: "unpublished",
-    actorEmail: resolvedActorEmail,
+    actorEmail: principal.actorEmail,
     request,
     details: { deleteObject: input.deleteObject },
   });
@@ -384,11 +324,10 @@ async function rotatePassword(
   request: Request,
   env: Env,
   slug: string,
-  actorEmail: string | null,
+  principal: PublishPrincipal,
 ): Promise<Response> {
   await getPreview(env, slug);
-  const input = parseRotatePasswordInput(await readJsonObject(request));
-  const resolvedActorEmail = resolveApiActorEmail(env, actorEmail ?? undefined);
+  const input = parseRotatePasswordCommand(await readJsonObject(request));
   const password = await hashPassword(input.password, env.PASSWORD_PEPPER);
 
   await env.PREVIEW_DB.prepare(
@@ -405,7 +344,7 @@ async function rotatePassword(
   await recordAudit(env, {
     slug,
     eventType: "password_rotated",
-    actorEmail: resolvedActorEmail,
+    actorEmail: principal.actorEmail,
     request,
     details: null,
   });
@@ -699,54 +638,6 @@ function accessRateLimitBlockFromRow(row: AccessRateLimitRow | null, now: number
   };
 }
 
-function parsePublishInput(body: Record<string, unknown>, env: Env, actorEmail: string | null): PublishInput {
-  const title = requireString(body.title, "title").trim();
-  const html = requireString(body.html, "html");
-  const password = requireString(body.password, "password");
-  const publisherEmail = resolveApiActorEmail(env, actorEmail ?? undefined);
-  const expiresAt = parseExpiresAt(body.expiresAt, env);
-  const sourceUrl = parseOptionalUrl(body.sourceUrl, "sourceUrl");
-  const maxHtmlBytes = parsePositiveInteger(env.MAX_HTML_BYTES, DEFAULT_MAX_HTML_BYTES);
-
-  if (title.length < 1 || title.length > 160) {
-    throw new HttpError(400, "invalid_title", "Title must be between 1 and 160 characters");
-  }
-
-  if (!looksLikeHtmlDocument(html)) {
-    throw new HttpError(400, "invalid_html", "HTML must be a complete document with an html element");
-  }
-
-  if (new TextEncoder().encode(html).byteLength > maxHtmlBytes) {
-    throw new HttpError(413, "html_too_large", `HTML must be ${maxHtmlBytes} bytes or smaller`);
-  }
-
-  validatePassword(password);
-
-  return {
-    title,
-    html,
-    password,
-    publisherEmail,
-    expiresAt,
-    sourceUrl,
-  };
-}
-
-function parseUnpublishInput(body: Record<string, unknown>): UnpublishInput {
-  return {
-    deleteObject: body.deleteObject === true,
-  };
-}
-
-function parseRotatePasswordInput(body: Record<string, unknown>): RotatePasswordInput {
-  const password = requireString(body.password, "password");
-  validatePassword(password);
-
-  return {
-    password,
-  };
-}
-
 async function readPasswordFromRequest(request: Request): Promise<string> {
   const contentType = request.headers.get("Content-Type") ?? "";
   if (contentType.includes("application/json")) {
@@ -771,68 +662,6 @@ function requireString(value: unknown, field: string): string {
   return value;
 }
 
-function parseOptionalString(value: unknown, field: string): string | null {
-  if (value === undefined || value === null || value === "") {
-    return null;
-  }
-
-  if (typeof value !== "string") {
-    throw new HttpError(400, "invalid_request", `${field} must be a string`);
-  }
-
-  return value;
-}
-
-function parseOptionalUrl(value: unknown, field: string): string | null {
-  const text = parseOptionalString(value, field);
-  if (!text) {
-    return null;
-  }
-
-  try {
-    return new URL(text).toString();
-  } catch {
-    throw new HttpError(400, "invalid_url", `${field} must be a valid URL`);
-  }
-}
-
-function parseExpiresAt(value: unknown, env: Env): string {
-  if (value === undefined || value === null || value === "") {
-    const days = parsePositiveInteger(env.DEFAULT_EXPIRES_DAYS, DEFAULT_EXPIRES_DAYS);
-    const date = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
-    return date.toISOString();
-  }
-
-  const text = requireString(value, "expiresAt");
-  const timestamp = Date.parse(text);
-  if (!Number.isFinite(timestamp)) {
-    throw new HttpError(400, "invalid_expiry", "expiresAt must be a valid ISO timestamp");
-  }
-
-  if (timestamp <= Date.now()) {
-    throw new HttpError(400, "invalid_expiry", "expiresAt must be in the future");
-  }
-
-  return new Date(timestamp).toISOString();
-}
-
-function validatePassword(password: string): void {
-  if (password.length < 12 || password.length > 256) {
-    throw new HttpError(400, "invalid_password", "Password must be between 12 and 256 characters");
-  }
-}
-
-function validatePublisherEmail(email: string, domain: string): void {
-  const suffix = `@${domain.toLowerCase()}`;
-  if (!email.endsWith(suffix) || email.length <= suffix.length) {
-    throw new HttpError(400, "invalid_publisher", `publisherEmail must be a ${suffix} address`);
-  }
-}
-
-function looksLikeHtmlDocument(html: string): boolean {
-  return /<html[\s>]/i.test(html);
-}
-
 function parsePositiveInteger(value: string | undefined, fallback: number): number {
   if (!value) {
     return fallback;
@@ -849,24 +678,6 @@ function parseTimestamp(value: string | null | undefined): number | null {
 
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? timestamp : null;
-}
-
-export function resolveApiActorEmail(
-  env: Pick<Env, "TRUSTED_PUBLISHER_EMAIL" | "PUBLISHER_EMAIL_DOMAIN">,
-  actorEmail?: string,
-): string {
-  const email = (actorEmail ?? env.TRUSTED_PUBLISHER_EMAIL)?.trim().toLowerCase();
-  if (!email) {
-    throw new HttpError(500, "missing_publisher_identity", "Trusted publisher identity is not configured");
-  }
-
-  const domain = env.PUBLISHER_EMAIL_DOMAIN?.trim().toLowerCase();
-  if (!domain) {
-    throw new HttpError(500, "missing_publisher_email_domain", "Publisher email domain is not configured");
-  }
-
-  validatePublisherEmail(email, domain);
-  return email;
 }
 
 function getCookie(request: Request, name: string): string | null {

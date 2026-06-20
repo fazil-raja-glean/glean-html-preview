@@ -19,6 +19,7 @@ export interface McpOAuthEnv {
   PUBLISH_ACCESS_AUD?: string;
   PUBLISH_ACCESS_TEAM_DOMAIN?: string;
   PUBLISHER_EMAIL_DOMAIN?: string;
+  PREVIEW_DB?: D1Database;
 }
 
 export type McpOAuthClient =

@@ -41,3 +41,22 @@ CREATE TABLE IF NOT EXISTS access_rate_limits (
 
 CREATE INDEX IF NOT EXISTS access_rate_limits_locked_until_idx
   ON access_rate_limits (locked_until);
+
+CREATE TABLE IF NOT EXISTS oauth_grants (
+  jti TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  client_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  actor_email TEXT,
+  issued_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  consumed_at TEXT,
+  consumed_by_jti TEXT,
+  revoked_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS oauth_grants_client_kind_idx
+  ON oauth_grants (client_id, kind);
+
+CREATE INDEX IF NOT EXISTS oauth_grants_expires_at_idx
+  ON oauth_grants (expires_at);

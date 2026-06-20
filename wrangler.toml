@@ -77,7 +77,6 @@ compatibility_date = "2026-06-18"
 workers_dev = true
 preview_urls = false
 r2_buckets = []
-d1_databases = []
 
 [env.mcp.vars]
 WORKER_ROLE = "mcp"
@@ -107,6 +106,12 @@ MAX_ACCESS_FAILURES_PER_PREVIEW = "100"
 name = "EDGE_MCP_RATE_LIMITER"
 namespace_id = "8182003"
 simple = { limit = 30, period = 60 }
+
+[[env.mcp.d1_databases]]
+binding = "PREVIEW_DB"
+database_name = "html-sharing-metadata-prod"
+database_id = "78fe7172-b574-4da5-949a-2fccd681cb41"
+preview_database_id = "b4a23c9d-e4f0-42df-85e5-028a32b1f8d6"
 
 [[env.mcp.services]]
 binding = "PUBLISH_API"

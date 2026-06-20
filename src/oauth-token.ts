@@ -1,5 +1,6 @@
 import { constantTimeEqual, randomBase64Url, toBase64Url, utf8 } from "./encoding";
 import { isValidAccessTokenClientId } from "./oauth-client";
+import type { OAuthGrantStore } from "./oauth-grants";
 import {
   accessTokenHasSupportedScope,
   type McpOAuthConfig,
@@ -52,7 +53,7 @@ export type AuthorizationCodeGrantResult =
   | { valid: false; error: string; description: string };
 
 export type RefreshTokenGrantResult =
-  | { valid: true; scope: string; actorEmail?: string }
+  | { valid: true; scope: string; actorEmail?: string; refreshToken: string }
   | { valid: false; error: string; description: string };
 
 export type AccessTokenVerificationResult =
@@ -63,6 +64,7 @@ const AUTHORIZATION_CODE_TTL_SECONDS = 5 * 60;
 
 export async function issueAuthorizationCode(
   config: McpOAuthConfig,
+  grantStore: OAuthGrantStore,
   input: {
     clientId: string;
     redirectUri: string;
@@ -73,26 +75,33 @@ export async function issueAuthorizationCode(
   },
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
-  return signJwt(
-    {
-      iss: config.issuer,
-      sub: input.clientId,
-      redirectUri: input.redirectUri,
-      scope: input.scope,
-      iat: now,
-      exp: now + AUTHORIZATION_CODE_TTL_SECONDS,
-      jti: randomBase64Url(16),
-      ...(input.actorEmail ? { email: input.actorEmail } : {}),
-      ...(input.codeChallenge
-        ? { codeChallenge: input.codeChallenge, codeChallengeMethod: input.codeChallengeMethod ?? "plain" }
-        : {}),
-    },
+  const expiresAt = now + AUTHORIZATION_CODE_TTL_SECONDS;
+  const jti = randomBase64Url(16);
+  const token = await signJwt(
+    authorizationCodePayload({
+      ...input,
+      issuer: config.issuer,
+      issuedAt: now,
+      expiresAt,
+      jti,
+    }),
     config.tokenSecret,
   );
+  await grantStore.create({
+    jti,
+    kind: "authorization_code",
+    clientId: input.clientId,
+    scope: input.scope,
+    issuedAt: now,
+    expiresAt,
+    ...(input.actorEmail ? { actorEmail: input.actorEmail } : {}),
+  });
+  return token;
 }
 
 export async function exchangeAuthorizationCodeGrant(
   config: McpOAuthConfig,
+  grantStore: OAuthGrantStore,
   form: URLSearchParams,
   clientId: string,
 ): Promise<AuthorizationCodeGrantResult> {
@@ -124,6 +133,18 @@ export async function exchangeAuthorizationCodeGrant(
     return { valid: false, error: "invalid_grant", description: "Authorization code verifier is invalid" };
   }
 
+  const consumed = await grantStore.consume({
+    jti: payload.jti,
+    kind: "authorization_code",
+    clientId,
+    scope: payload.scope,
+    now: new Date(),
+    ...(payload.email ? { actorEmail: payload.email } : {}),
+  });
+  if (!consumed) {
+    return { valid: false, error: "invalid_grant", description: "Authorization code has already been used" };
+  }
+
   return {
     valid: true,
     scope: payload.scope,
@@ -133,6 +154,7 @@ export async function exchangeAuthorizationCodeGrant(
 
 export async function exchangeRefreshTokenGrant(
   config: McpOAuthConfig,
+  grantStore: OAuthGrantStore,
   form: URLSearchParams,
   clientId: string,
 ): Promise<RefreshTokenGrantResult> {
@@ -150,9 +172,29 @@ export async function exchangeRefreshTokenGrant(
     return { valid: false, error: "invalid_grant", description: "Refresh token client is invalid" };
   }
 
+  const now = new Date();
+  const nextRefreshToken = await issueRefreshToken(config, grantStore, clientId, payload.scope, payload.email);
+  const consumed = await grantStore.consume({
+    jti: payload.jti,
+    kind: "refresh_token",
+    clientId,
+    scope: payload.scope,
+    consumedByJti: nextRefreshToken.jti,
+    now,
+    ...(payload.email ? { actorEmail: payload.email } : {}),
+  });
+  if (!consumed) {
+    await grantStore.revoke({
+      jti: nextRefreshToken.jti,
+      now,
+    });
+    return { valid: false, error: "invalid_grant", description: "Refresh token has already been used" };
+  }
+
   return {
     valid: true,
     scope: payload.scope,
+    refreshToken: nextRefreshToken.token,
     ...(payload.email ? { actorEmail: payload.email } : {}),
   };
 }
@@ -183,26 +225,36 @@ export async function issueAccessToken(
 
 export async function issueRefreshToken(
   config: McpOAuthConfig,
+  grantStore: OAuthGrantStore,
   clientId: string,
   scope: string,
   actorEmail?: string,
-): Promise<string> {
+): Promise<{ token: string; jti: string }> {
   const now = Math.floor(Date.now() / 1000);
-  return signJwt(
-    {
-      typ: "refresh",
-      iss: config.issuer,
-      sub: clientId,
-      client_id: clientId,
-      aud: config.resource,
+  const expiresAt = now + config.refreshTokenTtlSeconds;
+  const jti = randomBase64Url(16);
+  const token = await signJwt(
+    refreshTokenPayload({
+      actorEmail,
+      clientId,
+      config,
+      expiresAt,
+      issuedAt: now,
+      jti,
       scope,
-      iat: now,
-      exp: now + config.refreshTokenTtlSeconds,
-      jti: randomBase64Url(16),
-      ...(actorEmail ? { email: actorEmail } : {}),
-    },
+    }),
     config.tokenSecret,
   );
+  await grantStore.create({
+    jti,
+    kind: "refresh_token",
+    clientId,
+    scope,
+    issuedAt: now,
+    expiresAt,
+    ...(actorEmail ? { actorEmail } : {}),
+  });
+  return { token, jti };
 }
 
 export async function verifyAccessToken(
@@ -279,17 +331,8 @@ async function verifyRefreshToken(token: string, config: McpOAuthConfig): Promis
 }
 
 function parseAccessTokenPayload(value: Record<string, unknown>): AccessTokenPayload | null {
-  if (
-    typeof value.iss !== "string" ||
-    typeof value.sub !== "string" ||
-    typeof value.aud !== "string" ||
-    typeof value.scope !== "string" ||
-    typeof value.iat !== "number" ||
-    typeof value.exp !== "number" ||
-    typeof value.jti !== "string" ||
-    !Number.isInteger(value.iat) ||
-    !Number.isInteger(value.exp)
-  ) {
+  const base = parseBaseTokenPayload(value);
+  if (!base || typeof value.aud !== "string") {
     return null;
   }
 
@@ -303,66 +346,39 @@ function parseAccessTokenPayload(value: Record<string, unknown>): AccessTokenPay
 
   return {
     ...(value.typ ? { typ: value.typ } : {}),
-    iss: value.iss,
-    sub: value.sub,
+    iss: base.iss,
+    sub: base.sub,
     aud: value.aud,
-    scope: value.scope,
-    iat: value.iat,
-    exp: value.exp,
-    jti: value.jti,
-    ...(value.email ? { email: value.email } : {}),
+    scope: base.scope,
+    iat: base.iat,
+    exp: base.exp,
+    jti: base.jti,
+    ...(base.email ? { email: base.email } : {}),
   };
 }
 
 function parseRefreshTokenPayload(value: Record<string, unknown>): RefreshTokenPayload | null {
-  if (
-    value.typ !== "refresh" ||
-    typeof value.iss !== "string" ||
-    typeof value.sub !== "string" ||
-    typeof value.aud !== "string" ||
-    typeof value.scope !== "string" ||
-    typeof value.iat !== "number" ||
-    typeof value.exp !== "number" ||
-    typeof value.jti !== "string" ||
-    !Number.isInteger(value.iat) ||
-    !Number.isInteger(value.exp)
-  ) {
-    return null;
-  }
-
-  if (value.email !== undefined && typeof value.email !== "string") {
+  const base = parseBaseTokenPayload(value);
+  if (!base || value.typ !== "refresh" || typeof value.aud !== "string") {
     return null;
   }
 
   return {
     typ: value.typ,
-    iss: value.iss,
-    sub: value.sub,
+    iss: base.iss,
+    sub: base.sub,
     aud: value.aud,
-    scope: value.scope,
-    iat: value.iat,
-    exp: value.exp,
-    jti: value.jti,
-    ...(value.email ? { email: value.email } : {}),
+    scope: base.scope,
+    iat: base.iat,
+    exp: base.exp,
+    jti: base.jti,
+    ...(base.email ? { email: base.email } : {}),
   };
 }
 
 function parseAuthorizationCodePayload(value: Record<string, unknown>): AuthorizationCodePayload | null {
-  if (
-    typeof value.iss !== "string" ||
-    typeof value.sub !== "string" ||
-    typeof value.redirectUri !== "string" ||
-    typeof value.scope !== "string" ||
-    typeof value.iat !== "number" ||
-    typeof value.exp !== "number" ||
-    typeof value.jti !== "string" ||
-    !Number.isInteger(value.iat) ||
-    !Number.isInteger(value.exp)
-  ) {
-    return null;
-  }
-
-  if (value.email !== undefined && typeof value.email !== "string") {
+  const base = parseBaseTokenPayload(value);
+  if (!base || typeof value.redirectUri !== "string") {
     return null;
   }
 
@@ -379,16 +395,94 @@ function parseAuthorizationCodePayload(value: Record<string, unknown>): Authoriz
   }
 
   return {
+    iss: base.iss,
+    sub: base.sub,
+    redirectUri: value.redirectUri,
+    scope: base.scope,
+    iat: base.iat,
+    exp: base.exp,
+    jti: base.jti,
+    ...(base.email ? { email: base.email } : {}),
+    ...(value.codeChallenge ? { codeChallenge: value.codeChallenge } : {}),
+    ...(value.codeChallengeMethod ? { codeChallengeMethod: value.codeChallengeMethod } : {}),
+  };
+}
+
+function parseBaseTokenPayload(value: Record<string, unknown>): Omit<AccessTokenPayload, "aud" | "typ"> | null {
+  if (
+    typeof value.iss !== "string" ||
+    typeof value.sub !== "string" ||
+    typeof value.scope !== "string" ||
+    typeof value.iat !== "number" ||
+    typeof value.exp !== "number" ||
+    typeof value.jti !== "string" ||
+    !Number.isInteger(value.iat) ||
+    !Number.isInteger(value.exp)
+  ) {
+    return null;
+  }
+
+  if (value.email !== undefined && typeof value.email !== "string") {
+    return null;
+  }
+
+  return {
     iss: value.iss,
     sub: value.sub,
-    redirectUri: value.redirectUri,
     scope: value.scope,
     iat: value.iat,
     exp: value.exp,
     jti: value.jti,
     ...(value.email ? { email: value.email } : {}),
-    ...(value.codeChallenge ? { codeChallenge: value.codeChallenge } : {}),
-    ...(value.codeChallengeMethod ? { codeChallengeMethod: value.codeChallengeMethod } : {}),
+  };
+}
+
+function authorizationCodePayload(input: {
+  actorEmail?: string;
+  clientId: string;
+  codeChallenge?: string;
+  codeChallengeMethod?: CodeChallengeMethod;
+  expiresAt: number;
+  issuedAt: number;
+  issuer: string;
+  jti: string;
+  redirectUri: string;
+  scope: string;
+}): AuthorizationCodePayload {
+  return {
+    iss: input.issuer,
+    sub: input.clientId,
+    redirectUri: input.redirectUri,
+    scope: input.scope,
+    iat: input.issuedAt,
+    exp: input.expiresAt,
+    jti: input.jti,
+    ...(input.actorEmail ? { email: input.actorEmail } : {}),
+    ...(input.codeChallenge
+      ? { codeChallenge: input.codeChallenge, codeChallengeMethod: input.codeChallengeMethod ?? "plain" }
+      : {}),
+  };
+}
+
+function refreshTokenPayload(input: {
+  actorEmail?: string;
+  clientId: string;
+  config: McpOAuthConfig;
+  expiresAt: number;
+  issuedAt: number;
+  jti: string;
+  scope: string;
+}): RefreshTokenPayload {
+  return {
+    typ: "refresh",
+    iss: input.config.issuer,
+    sub: input.clientId,
+    aud: input.config.resource,
+    scope: input.scope,
+    iat: input.issuedAt,
+    exp: input.expiresAt,
+    jti: input.jti,
+    ...(input.actorEmail ? { email: input.actorEmail } : {}),
   };
 }
 

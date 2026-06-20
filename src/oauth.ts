@@ -1,5 +1,6 @@
 import { requireCloudflareAccessUserEmail, type CloudflareAccessJwtConfig } from "./admin-auth";
 import { HttpError, jsonResponse } from "./http";
+import { d1OAuthGrantStore, type OAuthGrantStore } from "./oauth-grants";
 import {
   configuredOAuthClient,
   isValidOAuthClient,
@@ -13,6 +14,7 @@ import {
   requestedScope,
   scopeErrorDescription,
   validatedRedirectUri,
+  type McpOAuthConfig,
   type McpOAuthEnv,
   type McpOAuthPublicConfig,
 } from "./oauth-config";
@@ -33,6 +35,24 @@ export interface McpOAuthAccessContext {
   actorEmail?: string;
   clientId: string;
 }
+
+type OAuthGrantType = "authorization_code" | "client_credentials" | "refresh_token";
+
+type TokenGrant =
+  | {
+      valid: true;
+      actorEmail?: string;
+      issueRefreshToken: boolean;
+      refreshToken?: string;
+      scope: string;
+    }
+  | {
+      valid: false;
+      description: string;
+      error: string;
+      headers?: HeadersInit;
+      status: number;
+    };
 
 export function handleOAuthAuthorizationServerMetadata(request: Request, env: McpOAuthEnv): Response {
   const config = mcpOAuthPublicConfig(request, env);
@@ -62,6 +82,7 @@ export function handleOAuthProtectedResourceMetadata(request: Request, env: McpO
 
 export async function handleOAuthAuthorizeRequest(request: Request, env: McpOAuthEnv): Promise<Response> {
   const config = mcpOAuthConfig(request, env);
+  const grantStore = d1OAuthGrantStore(env);
   const requestUrl = new URL(request.url);
   const responseType = requestUrl.searchParams.get("response_type");
   if (responseType !== "code") {
@@ -103,7 +124,7 @@ export async function handleOAuthAuthorizeRequest(request: Request, env: McpOAut
     );
   }
 
-  const code = await issueAuthorizationCode(config, {
+  const code = await issueAuthorizationCode(config, grantStore, {
     clientId,
     redirectUri,
     scope,
@@ -116,9 +137,10 @@ export async function handleOAuthAuthorizeRequest(request: Request, env: McpOAut
 
 export async function handleOAuthTokenRequest(request: Request, env: McpOAuthEnv): Promise<Response> {
   const config = mcpOAuthConfig(request, env);
+  const grantStore = d1OAuthGrantStore(env);
   const form = await readFormBody(request);
-  const grantType = form.get("grant_type");
-  if (grantType !== "client_credentials" && grantType !== "authorization_code" && grantType !== "refresh_token") {
+  const grantType = parseGrantType(form.get("grant_type"));
+  if (!grantType) {
     return oauthErrorResponse(
       400,
       "unsupported_grant_type",
@@ -138,42 +160,18 @@ export async function handleOAuthTokenRequest(request: Request, env: McpOAuthEnv
       "WWW-Authenticate": 'Basic realm="html-sharing-oauth", error="invalid_client"',
     });
   }
-  const oauthClient = configuredOAuthClient(client.clientId, config);
-  if (grantType === "client_credentials" && oauthClient?.kind === "public") {
-    return oauthErrorResponse(400, "unauthorized_client", "Public clients cannot use client_credentials");
+
+  const grant = await resolveTokenGrant(config, grantStore, form, grantType, client.clientId);
+  if (!grant.valid) {
+    return oauthErrorResponse(grant.status, grant.error, grant.description, grant.headers);
   }
 
-  const codeResult =
-    grantType === "authorization_code" ? await exchangeAuthorizationCodeGrant(config, form, client.clientId) : null;
-  if (codeResult && !codeResult.valid) {
-    return oauthErrorResponse(400, codeResult.error, codeResult.description);
-  }
-
-  const refreshResult =
-    grantType === "refresh_token" ? await exchangeRefreshTokenGrant(config, form, client.clientId) : null;
-  if (refreshResult && !refreshResult.valid) {
-    return oauthErrorResponse(400, refreshResult.error, refreshResult.description);
-  }
-
-  const requestedResource = form.get("resource");
-  if (requestedResource && requestedResource !== config.resource) {
-    return oauthErrorResponse(400, "invalid_target", "Requested resource is not this MCP server");
-  }
-
-  const scope = codeResult?.scope ?? refreshResult?.scope ?? requestedScope(form.get("scope"), config);
-  if (!scope) {
-    return oauthErrorResponse(400, "invalid_scope", scopeErrorDescription(config));
-  }
-
-  const actorEmail = codeResult?.actorEmail ?? refreshResult?.actorEmail;
   return jsonResponse({
-    access_token: await issueAccessToken(config, client.clientId, scope, actorEmail),
+    access_token: await issueAccessToken(config, client.clientId, grant.scope, grant.actorEmail),
     token_type: "Bearer",
     expires_in: config.accessTokenTtlSeconds,
-    scope,
-    ...(grantType === "authorization_code" || grantType === "refresh_token"
-      ? { refresh_token: await issueRefreshToken(config, client.clientId, scope, actorEmail) }
-      : {}),
+    scope: grant.scope,
+    ...(grant.issueRefreshToken && grant.refreshToken ? { refresh_token: grant.refreshToken } : {}),
   });
 }
 
@@ -208,6 +206,85 @@ async function readFormBody(request: Request): Promise<URLSearchParams> {
   }
 
   return new URLSearchParams(await request.text());
+}
+
+async function resolveTokenGrant(
+  config: McpOAuthConfig,
+  grantStore: OAuthGrantStore,
+  form: URLSearchParams,
+  grantType: OAuthGrantType,
+  clientId: string,
+): Promise<TokenGrant> {
+  const requestedResource = form.get("resource");
+  if (requestedResource && requestedResource !== config.resource) {
+    return invalidTokenGrant(400, "invalid_target", "Requested resource is not this MCP server");
+  }
+
+  switch (grantType) {
+    case "client_credentials": {
+      const oauthClient = configuredOAuthClient(clientId, config);
+      if (oauthClient?.kind === "public") {
+        return invalidTokenGrant(400, "unauthorized_client", "Public clients cannot use client_credentials");
+      }
+
+      const scope = requestedScope(form.get("scope"), config);
+      return scope
+        ? { valid: true, issueRefreshToken: false, scope }
+        : invalidTokenGrant(400, "invalid_scope", scopeErrorDescription(config));
+    }
+    case "authorization_code": {
+      const codeGrant = await exchangeAuthorizationCodeGrant(config, grantStore, form, clientId);
+      if (!codeGrant.valid) {
+        return invalidTokenGrant(400, codeGrant.error, codeGrant.description);
+      }
+
+      const refreshToken = await issueRefreshToken(
+        config,
+        grantStore,
+        clientId,
+        codeGrant.scope,
+        codeGrant.actorEmail,
+      );
+      return {
+        valid: true,
+        issueRefreshToken: true,
+        scope: codeGrant.scope,
+        refreshToken: refreshToken.token,
+        ...(codeGrant.actorEmail ? { actorEmail: codeGrant.actorEmail } : {}),
+      };
+    }
+    case "refresh_token": {
+      const refreshGrant = await exchangeRefreshTokenGrant(config, grantStore, form, clientId);
+      return refreshGrant.valid
+        ? {
+            valid: true,
+            issueRefreshToken: true,
+            scope: refreshGrant.scope,
+            refreshToken: refreshGrant.refreshToken,
+            ...(refreshGrant.actorEmail ? { actorEmail: refreshGrant.actorEmail } : {}),
+          }
+        : invalidTokenGrant(400, refreshGrant.error, refreshGrant.description);
+    }
+  }
+}
+
+function parseGrantType(value: string | null): OAuthGrantType | null {
+  return value === "client_credentials" || value === "authorization_code" || value === "refresh_token" ? value : null;
+}
+
+function invalidTokenGrant(
+  status: number,
+  error: string,
+  description: string,
+  headers?: HeadersInit,
+): TokenGrant {
+  return {
+    valid: false,
+    status,
+    error,
+    description,
+    ...(headers ? { headers } : {}),
+  };
 }
 
 function optionalQueryString(value: string | null): string | undefined {
