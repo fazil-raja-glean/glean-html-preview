@@ -120,7 +120,7 @@ describe("MCP OAuth", () => {
     });
   });
 
-  it("fails closed when user-bound OAuth is enabled without Access or local identity", async () => {
+  it("fails closed when user-bound OAuth is enabled without Glean OAuth or local identity", async () => {
     const authorizeUrl = new URL("http://localhost:8787/oauth/authorize");
     authorizeUrl.searchParams.set("response_type", "code");
     authorizeUrl.searchParams.set("client_id", codexClientId);
@@ -133,17 +133,47 @@ describe("MCP OAuth", () => {
       new Request(authorizeUrl),
       createMcpTestEnv({
         MCP_OAUTH_LOCAL_BYPASS_EMAIL: undefined,
-        MCP_OAUTH_ACCESS_TEAM_DOMAIN: "https://team.cloudflareaccess.com",
-        MCP_OAUTH_ACCESS_AUD: "expected-aud",
       }) as never,
     );
 
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(500);
     await expect(response.json()).resolves.toMatchObject({
       error: {
-        code: "missing_access_jwt",
+        code: "missing_glean_oauth",
       },
     });
+  });
+
+  it("redirects MCP authorization through Glean OAuth when no identity session exists", async () => {
+    const authorizeUrl = new URL("https://mcp.example.test/oauth/authorize");
+    authorizeUrl.searchParams.set("response_type", "code");
+    authorizeUrl.searchParams.set("client_id", codexClientId);
+    authorizeUrl.searchParams.set("redirect_uri", codexRedirectUri);
+    authorizeUrl.searchParams.set("scope", oauthScope);
+    authorizeUrl.searchParams.set("code_challenge", await s256CodeChallenge("verifier"));
+    authorizeUrl.searchParams.set("code_challenge_method", "S256");
+
+    const response = await worker.fetch(
+      new Request(authorizeUrl),
+      createMcpTestEnv({
+        WORKER_ROLE: "mcp",
+        MCP_BASE_URL: "https://mcp.example.test",
+        MCP_OAUTH_LOCAL_BYPASS_EMAIL: undefined,
+        ADMIN_SESSION_SECRET: "dev-admin-session-secret",
+        GLEAN_OAUTH_AUTHORIZATION_URL: "https://glean.example.test/oauth/authorize",
+        GLEAN_OAUTH_TOKEN_URL: "https://glean.example.test/oauth/token",
+        GLEAN_OAUTH_USERINFO_URL: "https://glean.example.test/oauth/userinfo",
+        GLEAN_OAUTH_CLIENT_ID: "html-sharing",
+        GLEAN_OAUTH_CLIENT_SECRET: "secret",
+      }) as never,
+    );
+
+    expect(response.status).toBe(302);
+    const redirect = new URL(response.headers.get("Location") ?? "");
+    expect(redirect.origin + redirect.pathname).toBe("https://glean.example.test/oauth/authorize");
+    expect(redirect.searchParams.get("redirect_uri")).toBe("https://mcp.example.test/oauth/callback");
+    expect(redirect.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(response.headers.get("Set-Cookie")).toContain("html_oauth_state=");
   });
 
   it("rejects wrong OAuth client credentials", async () => {

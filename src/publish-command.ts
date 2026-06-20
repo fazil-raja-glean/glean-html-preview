@@ -10,6 +10,14 @@ export interface PublishCommand {
   title: string;
 }
 
+export interface PreviewPublishInput {
+  expiresAt: string;
+  html: string;
+  password: string;
+  sourceUrl: string | null;
+  title: string;
+}
+
 export interface RotatePasswordCommand {
   password: string;
 }
@@ -31,6 +39,13 @@ export function parsePublishCommand(
   env: PublishCommandEnv,
   principal: PublishPrincipal,
 ): PublishCommand {
+  return {
+    ...parsePreviewPublishInput(body, env),
+    publisherEmail: principal.actorEmail,
+  };
+}
+
+export function parsePreviewPublishInput(body: Record<string, unknown>, env: PublishCommandEnv): PreviewPublishInput {
   const title = requireString(body.title, "title").trim();
   const html = requireString(body.html, "html");
   const password = requireString(body.password, "password");
@@ -56,7 +71,6 @@ export function parsePublishCommand(
     title,
     html,
     password,
-    publisherEmail: principal.actorEmail,
     expiresAt,
     sourceUrl,
   };

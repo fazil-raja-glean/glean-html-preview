@@ -18,7 +18,7 @@ MAX_ACCESS_FAILURES_PER_PREVIEW = "100"
 
 [[ratelimits]]
 name = "EDGE_ACCESS_RATE_LIMITER"
-namespace_id = "8182001"
+namespace_id = "<access-rate-limit-namespace-id>"
 simple = { limit = 30, period = 60 }
 
 [[r2_buckets]]
@@ -29,8 +29,8 @@ preview_bucket_name = "html-sharing-previews-dev"
 [[d1_databases]]
 binding = "PREVIEW_DB"
 database_name = "html-sharing-metadata-prod"
-database_id = "78fe7172-b574-4da5-949a-2fccd681cb41"
-preview_database_id = "b4a23c9d-e4f0-42df-85e5-028a32b1f8d6"
+database_id = "<d1-production-database-id>"
+preview_database_id = "<d1-preview-database-id>"
 
 [env.api]
 name = "html-api"
@@ -45,6 +45,14 @@ API_BASE_URL = "https://html-api.your-workers-subdomain.workers.dev"
 PUBLIC_BASE_URL = "https://html.your-workers-subdomain.workers.dev"
 PUBLISHER_EMAIL_DOMAIN = "example.com"
 TRUSTED_PUBLISHER_EMAIL = "html-sharing@example.com"
+ADMIN_ALLOWED_EMAIL_DOMAIN = "example.com"
+ADMIN_ALLOWED_EMAILS = ""
+ADMIN_SESSION_TTL_SECONDS = "28800"
+GLEAN_OAUTH_CLIENT_ID = "html-sharing-admin"
+GLEAN_OAUTH_AUTHORIZATION_URL = "https://your-glean-domain.example.com/oauth/authorize"
+GLEAN_OAUTH_TOKEN_URL = "https://your-glean-domain.example.com/oauth/token"
+GLEAN_OAUTH_USERINFO_URL = "https://your-glean-domain.example.com/oauth/userinfo"
+GLEAN_OAUTH_SCOPES = "openid email profile"
 PUBLISH_ACCESS_TEAM_DOMAIN = "https://<team-name>.cloudflareaccess.com"
 PUBLISH_ACCESS_AUD = "<access-application-aud-tag>"
 DEFAULT_EXPIRES_DAYS = "60"
@@ -56,7 +64,7 @@ MAX_ACCESS_FAILURES_PER_PREVIEW = "100"
 
 [[env.api.ratelimits]]
 name = "EDGE_PUBLISH_RATE_LIMITER"
-namespace_id = "8182002"
+namespace_id = "<publish-rate-limit-namespace-id>"
 simple = { limit = 20, period = 60 }
 
 [[env.api.r2_buckets]]
@@ -67,8 +75,8 @@ preview_bucket_name = "html-sharing-previews-dev"
 [[env.api.d1_databases]]
 binding = "PREVIEW_DB"
 database_name = "html-sharing-metadata-prod"
-database_id = "78fe7172-b574-4da5-949a-2fccd681cb41"
-preview_database_id = "b4a23c9d-e4f0-42df-85e5-028a32b1f8d6"
+database_id = "<d1-production-database-id>"
+preview_database_id = "<d1-preview-database-id>"
 
 [env.mcp]
 name = "html-mcp"
@@ -87,12 +95,16 @@ MCP_OAUTH_CLIENT_ID = "glean-html-sharing-mcp"
 MCP_OAUTH_PUBLIC_CLIENT_IDS = "codex-html-sharing-mcp,claude-code-html-sharing-mcp,cursor-html-sharing-mcp"
 MCP_OAUTH_ALLOWED_REDIRECT_URIS = "https://your-oauth-client.example.com/oauth/callback,http://127.0.0.1:5555/callback,http://localhost:5555/callback,cursor://anysphere.cursor-mcp/oauth/callback"
 MCP_OAUTH_REQUIRE_USER_AUTH = "true"
-MCP_OAUTH_ACCESS_TEAM_DOMAIN = "https://your-team.cloudflareaccess.com"
-MCP_OAUTH_ACCESS_AUD = "your-mcp-oauth-access-application-aud-tag"
 MCP_OAUTH_ALLOWED_EMAIL_DOMAIN = "example.com"
 MCP_OAUTH_SCOPES = "mcp:tools"
 MCP_OAUTH_ACCESS_TOKEN_TTL_SECONDS = "3600"
 MCP_OAUTH_REFRESH_TOKEN_TTL_SECONDS = "2592000"
+ADMIN_SESSION_TTL_SECONDS = "28800"
+GLEAN_OAUTH_CLIENT_ID = "html-sharing-admin"
+GLEAN_OAUTH_AUTHORIZATION_URL = "https://your-glean-domain.example.com/oauth/authorize"
+GLEAN_OAUTH_TOKEN_URL = "https://your-glean-domain.example.com/oauth/token"
+GLEAN_OAUTH_USERINFO_URL = "https://your-glean-domain.example.com/oauth/userinfo"
+GLEAN_OAUTH_SCOPES = "openid email profile"
 PUBLISHER_EMAIL_DOMAIN = "example.com"
 TRUSTED_PUBLISHER_EMAIL = "html-sharing@example.com"
 DEFAULT_EXPIRES_DAYS = "60"
@@ -104,14 +116,14 @@ MAX_ACCESS_FAILURES_PER_PREVIEW = "100"
 
 [[env.mcp.ratelimits]]
 name = "EDGE_MCP_RATE_LIMITER"
-namespace_id = "8182003"
+namespace_id = "<mcp-rate-limit-namespace-id>"
 simple = { limit = 30, period = 60 }
 
 [[env.mcp.d1_databases]]
 binding = "PREVIEW_DB"
 database_name = "html-sharing-metadata-prod"
-database_id = "78fe7172-b574-4da5-949a-2fccd681cb41"
-preview_database_id = "b4a23c9d-e4f0-42df-85e5-028a32b1f8d6"
+database_id = "<d1-production-database-id>"
+preview_database_id = "<d1-preview-database-id>"
 
 [[env.mcp.services]]
 binding = "PUBLISH_API"

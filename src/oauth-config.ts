@@ -1,11 +1,10 @@
 import { HttpError } from "./http";
 import { isLocalDevelopmentRequest } from "./origin-policy";
+import type { GleanOAuthEnv } from "./auth/glean-oauth";
 
-export interface McpOAuthEnv {
+export interface McpOAuthEnv extends GleanOAuthEnv {
   MCP_BASE_URL?: string;
   MCP_OAUTH_ACCESS_TOKEN_TTL_SECONDS?: string;
-  MCP_OAUTH_ACCESS_AUD?: string;
-  MCP_OAUTH_ACCESS_TEAM_DOMAIN?: string;
   MCP_OAUTH_ALLOWED_REDIRECT_URIS?: string;
   MCP_OAUTH_ALLOWED_EMAIL_DOMAIN?: string;
   MCP_OAUTH_CLIENT_ID?: string;
@@ -16,8 +15,6 @@ export interface McpOAuthEnv {
   MCP_OAUTH_REQUIRE_USER_AUTH?: string;
   MCP_OAUTH_SCOPES?: string;
   MCP_OAUTH_TOKEN_SECRET?: string;
-  PUBLISH_ACCESS_AUD?: string;
-  PUBLISH_ACCESS_TEAM_DOMAIN?: string;
   PUBLISHER_EMAIL_DOMAIN?: string;
   PREVIEW_DB?: D1Database;
 }

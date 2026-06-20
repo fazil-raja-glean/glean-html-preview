@@ -1,3 +1,6 @@
+import type { AuditEventRow } from "./audit";
+import type { PreviewRow } from "./preview-store";
+
 export const testOrigins = {
   apiBaseUrl: "https://api.example.test",
   mcpBaseUrl: "https://mcp.example.test",
@@ -41,8 +44,10 @@ interface TestOAuthGrantRow {
   scope: string;
 }
 
-export function createTestPreviewDb(): D1Database {
+export function createTestPreviewDb(seedPreviews: PreviewRow[] = []): D1Database {
   const oauthGrants = new Map<string, TestOAuthGrantRow>();
+  const previews = new Map(seedPreviews.map((preview) => [preview.slug, { ...preview }]));
+  const auditEvents: AuditEventRow[] = [];
 
   return {
     prepare(query: string): D1PreparedStatement {
@@ -67,6 +72,78 @@ export function createTestPreviewDb(): D1Database {
               consumed_at: null,
               consumed_by_jti: null,
               revoked_at: null,
+            });
+            return d1Result<T>(1);
+          }
+
+          if (normalizedQuery.startsWith("INSERT INTO PREVIEWS")) {
+            const [
+              slug,
+              title,
+              objectKey,
+              passwordHash,
+              passwordSalt,
+              passwordIterations,
+              publisherEmail,
+              sourceUrl,
+              createdAt,
+              expiresAt,
+            ] = statement.values;
+            previews.set(String(slug), {
+              slug: String(slug),
+              title: String(title),
+              object_key: String(objectKey),
+              password_hash: String(passwordHash),
+              password_salt: String(passwordSalt),
+              password_iterations: Number(passwordIterations),
+              password_version: 1,
+              publisher_email: String(publisherEmail),
+              source_url: typeof sourceUrl === "string" ? sourceUrl : null,
+              created_at: String(createdAt),
+              expires_at: String(expiresAt),
+              deleted_at: null,
+            });
+            return d1Result<T>(1);
+          }
+
+          if (normalizedQuery.startsWith("UPDATE PREVIEWS SET PASSWORD_HASH")) {
+            const [passwordHash, passwordSalt, passwordIterations, slug] = statement.values;
+            const preview = previews.get(String(slug));
+            if (!preview || preview.deleted_at) {
+              return d1Result<T>(0);
+            }
+
+            preview.password_hash = String(passwordHash);
+            preview.password_salt = String(passwordSalt);
+            preview.password_iterations = Number(passwordIterations);
+            preview.password_version += 1;
+            return d1Result<T>(1);
+          }
+
+          if (normalizedQuery.startsWith("UPDATE PREVIEWS SET DELETED_AT")) {
+            const [deletedAt, slug] = statement.values;
+            const preview = previews.get(String(slug));
+            if (!preview || preview.deleted_at) {
+              return d1Result<T>(0);
+            }
+
+            preview.deleted_at = String(deletedAt);
+            return d1Result<T>(1);
+          }
+
+          if (normalizedQuery.startsWith("DELETE FROM PREVIEWS")) {
+            return d1Result<T>(previews.delete(String(statement.values[0])) ? 1 : 0);
+          }
+
+          if (normalizedQuery.startsWith("INSERT INTO AUDIT_EVENTS")) {
+            const [slug, eventType, actorEmail, , createdAt, detailsJson] = statement.values;
+            auditEvents.push({
+              id: auditEvents.length + 1,
+              slug: String(slug),
+              event_type: String(eventType),
+              actor_email: typeof actorEmail === "string" ? actorEmail : null,
+              created_at: String(createdAt),
+              details_json: typeof detailsJson === "string" ? detailsJson : null,
             });
             return d1Result<T>(1);
           }
@@ -106,9 +183,44 @@ export function createTestPreviewDb(): D1Database {
           return d1Result<T>(0);
         },
         async first<T = Record<string, unknown>>(): Promise<T | null> {
+          if (normalizedQuery.startsWith("SELECT * FROM PREVIEWS WHERE SLUG = ? AND LOWER(PUBLISHER_EMAIL)")) {
+            const preview = previews.get(String(statement.values[0]));
+            const publisherEmail = String(statement.values[1]).toLowerCase();
+            return preview?.publisher_email.toLowerCase() === publisherEmail ? (preview as T) : null;
+          }
+
+          if (normalizedQuery.startsWith("SELECT * FROM PREVIEWS WHERE SLUG")) {
+            return (previews.get(String(statement.values[0])) as T | undefined) ?? null;
+          }
+
           return null;
         },
         async all<T = Record<string, unknown>>(): Promise<D1Result<T>> {
+          if (normalizedQuery.startsWith("SELECT * FROM PREVIEWS WHERE LOWER(PUBLISHER_EMAIL)")) {
+            const publisherEmail = String(statement.values[0]).toLowerCase();
+            const limit = Number(statement.values[1] ?? 100);
+            const rows = [...previews.values()]
+              .filter((preview) => preview.publisher_email.toLowerCase() === publisherEmail)
+              .sort((left, right) => right.created_at.localeCompare(left.created_at))
+              .slice(0, limit);
+            return d1Rows(rows as T[]);
+          }
+
+          if (normalizedQuery.startsWith("SELECT * FROM PREVIEWS")) {
+            const rows = [...previews.values()].sort((left, right) => right.created_at.localeCompare(left.created_at));
+            return d1Rows(rows as T[]);
+          }
+
+          if (normalizedQuery.startsWith("SELECT ID, SLUG, EVENT_TYPE")) {
+            const slug = String(statement.values[0]);
+            const limit = Number(statement.values[1] ?? 25);
+            const rows = auditEvents
+              .filter((event) => event.slug === slug)
+              .sort((left, right) => right.created_at.localeCompare(left.created_at))
+              .slice(0, limit);
+            return d1Rows(rows as T[]);
+          }
+
           return d1Result<T>(0);
         },
         async raw<T = unknown[]>(options?: { columnNames?: boolean }): Promise<T[] | [string[], ...T[]]> {
@@ -119,6 +231,30 @@ export function createTestPreviewDb(): D1Database {
       return statement as D1PreparedStatement;
     },
   } as D1Database;
+}
+
+export function createTestR2Bucket(initialObjects: Record<string, string> = {}): R2Bucket {
+  const objects = new Map(Object.entries(initialObjects));
+  return {
+    async get(key: string): Promise<R2ObjectBody | null> {
+      const value = objects.get(key);
+      if (value === undefined) {
+        return null;
+      }
+
+      return {
+        body: new Response(value).body,
+        text: async () => value,
+      } as R2ObjectBody;
+    },
+    async put(key: string, value: string | ReadableStream | ArrayBuffer | ArrayBufferView | Blob): Promise<R2Object> {
+      objects.set(key, typeof value === "string" ? value : "");
+      return {} as R2Object;
+    },
+    async delete(key: string): Promise<void> {
+      objects.delete(key);
+    },
+  } as R2Bucket;
 }
 
 function d1Result<T>(changes: number): D1Result<T> {
@@ -134,5 +270,21 @@ function d1Result<T>(changes: number): D1Result<T> {
       size_after: 0,
     },
     results: [],
+  };
+}
+
+function d1Rows<T>(rows: T[]): D1Result<T> {
+  return {
+    success: true,
+    meta: {
+      changed_db: false,
+      changes: 0,
+      duration: 0,
+      last_row_id: 0,
+      rows_read: rows.length,
+      rows_written: 0,
+      size_after: 0,
+    },
+    results: rows,
   };
 }

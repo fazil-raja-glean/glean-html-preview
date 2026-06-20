@@ -159,12 +159,14 @@ describe("MCP endpoint", () => {
     expect(capturedRequest?.headers.get("X-Publish-Actor-Email")).toBe(oauthActorEmail);
     expect(capturedRequest?.headers.get("CF-Access-Client-Id")).toBeNull();
     expect(capturedRequest?.headers.get("CF-Access-Client-Secret")).toBeNull();
-    expect(capturedRequest?.body).toEqual({
+    const capturedBody = toRecord(capturedRequest?.body);
+    expect(capturedBody).toMatchObject({
       title: "Smoke Test",
       html: "<!doctype html><html><body><h1>Hello</h1></body></html>",
       password: "correct horse battery",
       sourceUrl: "https://source.example.test/artifacts/test",
     });
+    expect(Date.parse(String(capturedBody.expiresAt))).toBeGreaterThan(Date.now());
   });
 
   it("rejects publish tool calls when the OAuth token is not bound to a Glean user", async () => {
@@ -275,3 +277,9 @@ describe("MCP endpoint", () => {
     });
   });
 });
+
+function toRecord(value: unknown): Record<string, unknown> {
+  expect(value).toBeTypeOf("object");
+  expect(value).not.toBeNull();
+  return value as Record<string, unknown>;
+}

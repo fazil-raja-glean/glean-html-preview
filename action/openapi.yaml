@@ -1,14 +1,15 @@
 openapi: 3.0.3
 info:
-  title: HTML Sharing
+  title: HTML Sharing Legacy Direct API
   version: 0.1.0
+  description: Legacy direct publish API for backend scripts or custom Actions. The preferred integration is the OAuth-backed MCP server at /mcp.
 servers:
-  - url: https://html-api.glean-share.workers.dev
+  - url: https://html-api.your-workers-subdomain.workers.dev
 paths:
   /v1/html-previews:
     post:
       operationId: publishHtmlPreview
-      summary: Publish a password-protected HTML preview
+      summary: Publish a password-protected HTML preview through the legacy direct API
       security:
         - publishBearer: []
           cloudflareAccessClientId: []
@@ -58,7 +59,7 @@ paths:
                 properties:
                   url:
                     type: string
-                    description: Password-gated preview URL on https://html.glean-share.workers.dev.
+                    description: Password-gated preview URL on https://html.your-workers-subdomain.workers.dev.
                   slug:
                     type: string
                   expiresAt:

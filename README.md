@@ -4,11 +4,13 @@ Cloudflare Workers service for publishing untrusted HTML as password-protected, 
 
 The preferred integration is a Glean remote MCP server:
 
+- Glean users authenticate through Glean OAuth.
 - Glean obtains short-lived OAuth access tokens from `${MCP_BASE_URL}/oauth/token`.
 - Glean calls `${MCP_BASE_URL}/mcp` with those OAuth bearer tokens.
 - The MCP Worker calls the protected API Worker through a Cloudflare service binding.
 - Uploaded HTML is stored privately in R2 and served only through the preview Worker.
 - The preview Worker requires a viewer password and serves the uploaded HTML with a restrictive CSP sandbox.
+- Signed-in users use `${API_BASE_URL}/admin` to list their own previews, reset viewer passwords, unpublish, and delete their own previews.
 
 ## Security Model
 
@@ -17,7 +19,7 @@ This repo intentionally has three Worker surfaces:
 | Surface | Worker | URL | Purpose |
 | --- | --- | --- | --- |
 | Preview | `html` | `${PUBLIC_BASE_URL}` | Viewer password gate and sandboxed HTML serving |
-| API | `html-api` | `${API_BASE_URL}` | Publish, unpublish, and password rotation |
+| API | `html-api` | `${API_BASE_URL}` | Publish routes and Glean-authenticated self-service UI |
 | MCP | `html-mcp` | `${MCP_BASE_URL}` | Glean MCP JSON-RPC endpoint |
 
 Key rules:
@@ -25,8 +27,9 @@ Key rules:
 - Do not put publish/admin routes on the preview Worker.
 - Do not put preview routes on the API or MCP Workers.
 - Do not give the MCP Worker direct R2 access. It only gets D1 for OAuth grant and refresh-token state.
-- Do not give Glean the Cloudflare Access service-token secret.
+- Do not expose R2, D1, publish, OAuth-token-signing, cookie-signing, or password-pepper secrets to browser JavaScript.
 - Do not weaken `HTML_SECURITY_HEADERS` in `src/index.ts`; the uploaded HTML must stay sandboxed.
+- Do not render uploaded HTML inside the admin UI. Admin HTML downloads are served as `text/plain`.
 
 Uploaded HTML is served with headers that block scripts, network calls, form posts, frames, workers, plugins, and remote beacons.
 
@@ -40,11 +43,13 @@ Do not commit real secrets. `.env`, `.dev.vars`, `.wrangler/`, and `node_modules
 | `PASSWORD_PEPPER` | yes | yes | no | no |
 | `PUBLISH_API_TOKEN` | no | yes | yes | no |
 | `PUBLISH_INTERNAL_SERVICE_TOKEN` | no | yes | yes | no |
+| `ADMIN_SESSION_SECRET` | no | yes | yes | no |
+| `GLEAN_OAUTH_CLIENT_SECRET` | no | yes | yes | no |
 | `MCP_OAUTH_CLIENT_ID` | no | no | yes | yes |
 | `MCP_OAUTH_CLIENT_SECRET` | no | no | yes | yes |
 | `MCP_OAUTH_TOKEN_SECRET` | no | no | yes | no |
 
-`PUBLISH_ACCESS_TEAM_DOMAIN`, `PUBLISH_ACCESS_AUD`, `MCP_OAUTH_ALLOWED_REDIRECT_URIS`, `MCP_OAUTH_PUBLIC_CLIENT_IDS`, `MCP_OAUTH_SCOPES`, `MCP_OAUTH_REFRESH_TOKEN_TTL_SECONDS`, Worker names, R2 bucket names, D1 IDs, and rate-limit namespace IDs are configuration, not bearer secrets. They can live in `wrangler.toml`.
+`GLEAN_OAUTH_CLIENT_ID`, `GLEAN_OAUTH_AUTHORIZATION_URL`, `GLEAN_OAUTH_TOKEN_URL`, `GLEAN_OAUTH_USERINFO_URL`, `GLEAN_OAUTH_SCOPES`, `ADMIN_ALLOWED_EMAIL_DOMAIN`, `ADMIN_ALLOWED_EMAILS`, `PUBLISH_ACCESS_TEAM_DOMAIN`, `PUBLISH_ACCESS_AUD`, `MCP_OAUTH_ALLOWED_REDIRECT_URIS`, `MCP_OAUTH_PUBLIC_CLIENT_IDS`, `MCP_OAUTH_SCOPES`, `MCP_OAUTH_REFRESH_TOKEN_TTL_SECONDS`, Worker names, R2 bucket names, D1 IDs, and rate-limit namespace IDs are configuration, not bearer secrets. They can live in `wrangler.toml`.
 
 ## Deploy MCP From Scratch
 
@@ -90,44 +95,54 @@ Create three Cloudflare Worker Rate Limiting namespaces, then put their IDs into
 | `EDGE_PUBLISH_RATE_LIMITER` | `POST /v1/html-previews` | 20/min |
 | `EDGE_MCP_RATE_LIMITER` | `POST /mcp` | 30/min |
 
-### 4. Configure Cloudflare Access for the API Worker
+### 4. Configure Glean OAuth
 
-In Cloudflare Zero Trust:
+Create a Glean OAuth client for this deployment and allow-list these redirect URIs:
 
-1. Open **Access -> Applications**.
-2. Create an application for `${API_BASE_URL}`.
-3. Do not protect `${PUBLIC_BASE_URL}`.
-4. Copy the Access team domain, for example `https://<team>.cloudflareaccess.com`.
-5. Copy the application AUD tag.
-6. Update `wrangler.toml`:
+- `${API_BASE_URL}/admin/oauth/callback`
+- `${MCP_BASE_URL}/oauth/callback`
+
+Set the Glean OAuth endpoints in `wrangler.toml` for both `env.api` and `env.mcp`:
+
+```toml
+GLEAN_OAUTH_CLIENT_ID = "html-sharing-admin"
+GLEAN_OAUTH_AUTHORIZATION_URL = "https://<glean-domain>/oauth/authorize"
+GLEAN_OAUTH_TOKEN_URL = "https://<glean-domain>/oauth/token"
+GLEAN_OAUTH_USERINFO_URL = "https://<glean-domain>/oauth/userinfo"
+GLEAN_OAUTH_SCOPES = "openid email profile"
+```
+
+If Glean provides OpenID discovery for this OAuth client, you can set `GLEAN_OAUTH_ISSUER` or `GLEAN_OAUTH_DISCOVERY_URL` instead of the three endpoint URLs.
+
+Configure self-service console authorization:
+
+```toml
+ADMIN_ALLOWED_EMAIL_DOMAIN = "example.com"
+ADMIN_ALLOWED_EMAILS = ""
+ADMIN_SESSION_TTL_SECONDS = "28800"
+MCP_OAUTH_ALLOWED_EMAIL_DOMAIN = "example.com"
+MCP_OAUTH_REQUIRE_USER_AUTH = "true"
+```
+
+If `ADMIN_ALLOWED_EMAILS` is set, only those exact emails can use `/admin`. Otherwise, any verified user in `ADMIN_ALLOWED_EMAIL_DOMAIN` can use `/admin`.
+
+The `/admin` console is owner-scoped by default: a signed-in user only sees and manages previews whose `publisher_email` matches their Glean email. The allowlist controls who can enter the console; it does not make every allowed user a global administrator.
+
+The API and MCP workers share the same Glean OAuth client configuration, but they use separate session cookies because they run on separate production origins:
+
+- `/admin` sessions are scoped to the API Worker.
+- `/oauth/authorize` sessions are scoped to the MCP Worker.
+
+### 5. Configure legacy direct API Access, if needed
+
+The preferred Glean and admin paths do not require Cloudflare Access service tokens in the browser or in Glean. The direct `/v1/html-previews*` API can still keep the old second lock for backend scripts or legacy custom Actions:
 
 ```toml
 PUBLISH_ACCESS_TEAM_DOMAIN = "https://<team>.cloudflareaccess.com"
 PUBLISH_ACCESS_AUD = "<access-application-aud-tag>"
 ```
 
-This protects external API requests. The MCP Worker does not need the Cloudflare Access client id or client secret because it reaches the API Worker through the `PUBLISH_API` service binding.
-
-### 5. Configure Cloudflare Access for MCP OAuth
-
-Create a separate Cloudflare Access application for `${MCP_BASE_URL}/oauth/authorize`.
-
-- Protect only `/oauth/authorize`.
-- Do not protect `/mcp`, `/oauth/token`, or the OAuth metadata endpoints.
-- Allow only the Glean users or groups that should be able to publish previews.
-
-Update `wrangler.toml`:
-
-```toml
-MCP_OAUTH_REQUIRE_USER_AUTH = "true"
-MCP_OAUTH_ACCESS_TEAM_DOMAIN = "https://<team>.cloudflareaccess.com"
-MCP_OAUTH_ACCESS_AUD = "<mcp-oauth-access-application-aud-tag>"
-MCP_OAUTH_ALLOWED_EMAIL_DOMAIN = "glean.com"
-```
-
-When Glean, Codex, Claude Code, or Cursor starts the authorization-code flow, the browser signs in through Cloudflare Access. The Worker verifies the Access JWT, binds the verified user email into the OAuth code, access token, and refresh token, and records that email as the preview publisher.
-
-This Worker is the OAuth authorization server for the HTML-sharing MCP server. Glean's OAuth setup should point at this Worker's `/oauth/authorize` and `/oauth/token` endpoints; the repo does not import a Glean OAuth SDK. OAuth codes are consumed once in D1, and refresh tokens rotate on every refresh so old refresh tokens stop working after rotation.
+Do not protect `${PUBLIC_BASE_URL}`. The MCP Worker does not need the Cloudflare Access client id or client secret because it reaches the API Worker through the `PUBLISH_API` service binding.
 
 ### 6. Generate production tokens
 
@@ -135,9 +150,11 @@ Generate the Worker secrets locally:
 
 ```sh
 export COOKIE_SIGNING_SECRET="$(openssl rand -base64 48)"
+export ADMIN_SESSION_SECRET="$(openssl rand -base64 48)"
 export PASSWORD_PEPPER="$(openssl rand -base64 48)"
 export PUBLISH_API_TOKEN="$(openssl rand -base64 48)"
 export PUBLISH_INTERNAL_SERVICE_TOKEN="$(openssl rand -base64 48)"
+export GLEAN_OAUTH_CLIENT_SECRET="$(openssl rand -base64 48)"
 export MCP_OAUTH_CLIENT_SECRET="$(openssl rand -base64 48)"
 export MCP_OAUTH_TOKEN_SECRET="$(openssl rand -base64 48)"
 ```
@@ -151,6 +168,9 @@ printf '%s' "$COOKIE_SIGNING_SECRET" | npx wrangler secret put COOKIE_SIGNING_SE
 printf '%s' "$COOKIE_SIGNING_SECRET" | npx wrangler secret put COOKIE_SIGNING_SECRET --env api
 printf '%s' "$COOKIE_SIGNING_SECRET" | npx wrangler secret put COOKIE_SIGNING_SECRET --env mcp
 
+printf '%s' "$ADMIN_SESSION_SECRET" | npx wrangler secret put ADMIN_SESSION_SECRET --env api
+printf '%s' "$ADMIN_SESSION_SECRET" | npx wrangler secret put ADMIN_SESSION_SECRET --env mcp
+
 printf '%s' "$PASSWORD_PEPPER" | npx wrangler secret put PASSWORD_PEPPER --env=""
 printf '%s' "$PASSWORD_PEPPER" | npx wrangler secret put PASSWORD_PEPPER --env api
 
@@ -159,6 +179,9 @@ printf '%s' "$PUBLISH_API_TOKEN" | npx wrangler secret put PUBLISH_API_TOKEN --e
 
 printf '%s' "$PUBLISH_INTERNAL_SERVICE_TOKEN" | npx wrangler secret put PUBLISH_INTERNAL_SERVICE_TOKEN --env api
 printf '%s' "$PUBLISH_INTERNAL_SERVICE_TOKEN" | npx wrangler secret put PUBLISH_INTERNAL_SERVICE_TOKEN --env mcp
+
+printf '%s' "$GLEAN_OAUTH_CLIENT_SECRET" | npx wrangler secret put GLEAN_OAUTH_CLIENT_SECRET --env api
+printf '%s' "$GLEAN_OAUTH_CLIENT_SECRET" | npx wrangler secret put GLEAN_OAUTH_CLIENT_SECRET --env mcp
 
 printf '%s' "$MCP_OAUTH_CLIENT_SECRET" | npx wrangler secret put MCP_OAUTH_CLIENT_SECRET --env mcp
 printf '%s' "$MCP_OAUTH_TOKEN_SECRET" | npx wrangler secret put MCP_OAUTH_TOKEN_SECRET --env mcp
@@ -409,7 +432,7 @@ For Cursor, add a remote server to `.cursor/mcp.json` or `~/.cursor/mcp.json`:
 {
   "mcpServers": {
     "html-sharing": {
-      "url": "https://html-mcp.glean-share.workers.dev/mcp",
+      "url": "https://html-mcp.your-workers-subdomain.workers.dev/mcp",
       "auth": {
         "CLIENT_ID": "cursor-html-sharing-mcp",
         "scopes": ["mcp:tools"]
@@ -430,6 +453,8 @@ LOCAL_PUBLISH_API_TOKEN="$(openssl rand -base64 48)"
 LOCAL_MCP_OAUTH_CLIENT_SECRET="$(openssl rand -base64 48)"
 LOCAL_MCP_OAUTH_TOKEN_SECRET="$(openssl rand -base64 48)"
 LOCAL_ADMIN_BYPASS_SECRET="$(openssl rand -base64 48)"
+LOCAL_ADMIN_SESSION_SECRET="$(openssl rand -base64 48)"
+LOCAL_GLEAN_OAUTH_CLIENT_SECRET="$(openssl rand -base64 48)"
 LOCAL_COOKIE_SIGNING_SECRET="$(openssl rand -base64 48)"
 LOCAL_PASSWORD_PEPPER="$(openssl rand -base64 48)"
 
@@ -445,6 +470,14 @@ MCP_OAUTH_SCOPES=mcp:tools
 MCP_OAUTH_REFRESH_TOKEN_TTL_SECONDS=2592000
 MCP_OAUTH_CLIENT_SECRET=$LOCAL_MCP_OAUTH_CLIENT_SECRET
 MCP_OAUTH_TOKEN_SECRET=$LOCAL_MCP_OAUTH_TOKEN_SECRET
+ADMIN_ALLOWED_EMAIL_DOMAIN=example.com
+ADMIN_LOCAL_BYPASS_EMAIL=html-sharing@example.com
+ADMIN_SESSION_SECRET=$LOCAL_ADMIN_SESSION_SECRET
+GLEAN_OAUTH_CLIENT_ID=local-html-sharing-admin
+GLEAN_OAUTH_CLIENT_SECRET=$LOCAL_GLEAN_OAUTH_CLIENT_SECRET
+GLEAN_OAUTH_AUTHORIZATION_URL=http://localhost:8787/oauth/dev/authorize
+GLEAN_OAUTH_TOKEN_URL=http://localhost:8787/oauth/dev/token
+GLEAN_OAUTH_USERINFO_URL=http://localhost:8787/oauth/dev/userinfo
 PUBLISH_ADMIN_LOCAL_BYPASS_SECRET=$LOCAL_ADMIN_BYPASS_SECRET
 COOKIE_SIGNING_SECRET=$LOCAL_COOKIE_SIGNING_SECRET
 PASSWORD_PEPPER=$LOCAL_PASSWORD_PEPPER
@@ -461,6 +494,14 @@ npm install --ignore-scripts
 npm run d1:migrate:local
 npm run dev
 ```
+
+Open the local admin UI:
+
+```sh
+open http://localhost:8787/admin
+```
+
+With `ADMIN_LOCAL_BYPASS_EMAIL` set on localhost, `/admin/login` mints a local admin session without calling Glean OAuth. Production never uses this bypass because it is accepted only for local development hosts.
 
 Publish locally through the API route:
 

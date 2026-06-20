@@ -1,4 +1,5 @@
-import { requireCloudflareAccessUserEmail, type CloudflareAccessJwtConfig } from "./admin-auth";
+import { MCP_GLEAN_OAUTH_FLOW, completeGleanOAuthLogin, startGleanOAuthLogin } from "./auth/glean-oauth";
+import { readIdentitySession, requireAllowedOAuthUser } from "./auth/session";
 import { HttpError, jsonResponse } from "./http";
 import { d1OAuthGrantStore, type OAuthGrantStore } from "./oauth-grants";
 import {
@@ -37,6 +38,14 @@ export interface McpOAuthAccessContext {
 }
 
 type OAuthGrantType = "authorization_code" | "client_credentials" | "refresh_token";
+
+type AuthorizeActorResult =
+  | {
+      actorEmail?: string;
+    }
+  | {
+      response: Response;
+    };
 
 type TokenGrant =
   | {
@@ -124,15 +133,24 @@ export async function handleOAuthAuthorizeRequest(request: Request, env: McpOAut
     );
   }
 
+  const actor = await authorizeActorEmail(request, env);
+  if ("response" in actor) {
+    return actor.response;
+  }
+
   const code = await issueAuthorizationCode(config, grantStore, {
     clientId,
     redirectUri,
     scope,
-    actorEmail: await authorizeActorEmail(request, env),
+    ...(actor.actorEmail ? { actorEmail: actor.actorEmail } : {}),
     ...(codeChallenge ? { codeChallenge, codeChallengeMethod: codeChallengeMethod ?? "plain" } : {}),
   });
 
   return redirectWithCode(redirectUri, code, requestUrl);
+}
+
+export function handleOAuthCallbackRequest(request: Request, env: McpOAuthEnv): Promise<Response> {
+  return completeGleanOAuthLogin(request, env, MCP_GLEAN_OAUTH_FLOW);
 }
 
 export async function handleOAuthTokenRequest(request: Request, env: McpOAuthEnv): Promise<Response> {
@@ -303,54 +321,61 @@ function mcpBearerChallenge(config: McpOAuthPublicConfig, error?: string): Heade
   };
 }
 
-async function authorizeActorEmail(request: Request, env: McpOAuthEnv): Promise<string | undefined> {
+async function authorizeActorEmail(request: Request, env: McpOAuthEnv): Promise<AuthorizeActorResult> {
   if (!booleanEnv(env.MCP_OAUTH_REQUIRE_USER_AUTH)) {
-    return undefined;
+    return {};
   }
 
   const requestUrl = new URL(request.url);
   if (isLocalDevelopmentRequest(request, requestUrl) && env.MCP_OAUTH_LOCAL_BYPASS_EMAIL) {
-    return normalizedAllowedEmail(env.MCP_OAUTH_LOCAL_BYPASS_EMAIL, env);
+    return {
+      actorEmail: requireAllowedOAuthUser(
+        {
+          email: normalizedEmail(env.MCP_OAUTH_LOCAL_BYPASS_EMAIL, "MCP_OAUTH_LOCAL_BYPASS_EMAIL"),
+        },
+        env,
+      ).email,
+    };
   }
 
-  const email = await requireCloudflareAccessUserEmail(request, oauthAccessConfig(env));
-  return normalizedAllowedEmail(email, env);
-}
+  const session = await readIdentitySession(request, env, "oauth");
+  if (session) {
+    return {
+      actorEmail: requireAllowedOAuthUser(session, env).email,
+    };
+  }
 
-function oauthAccessConfig(env: McpOAuthEnv): CloudflareAccessJwtConfig {
-  const teamDomain = env.MCP_OAUTH_ACCESS_TEAM_DOMAIN ?? env.PUBLISH_ACCESS_TEAM_DOMAIN;
-  const audience = env.MCP_OAUTH_ACCESS_AUD ?? env.PUBLISH_ACCESS_AUD;
-  if (!teamDomain || !audience) {
-    throw new HttpError(
-      500,
-      "missing_mcp_oauth_user_auth",
-      "MCP OAuth user authentication is not configured",
-    );
+  if (!hasGleanOAuthConfig(env)) {
+    throw new HttpError(500, "missing_glean_oauth", "Glean OAuth is not configured");
   }
 
   return {
-    teamDomain,
-    audience,
+    response: await startGleanOAuthLogin(
+      request,
+      env,
+      MCP_GLEAN_OAUTH_FLOW,
+      `${requestUrl.pathname}${requestUrl.search}`,
+    ),
   };
 }
 
-function normalizedAllowedEmail(value: string, env: McpOAuthEnv): string {
+function normalizedEmail(value: string, field: string): string {
   const email = value.trim().toLowerCase();
   if (!email.includes("@")) {
-    throw new HttpError(403, "invalid_access_email", "Cloudflare Access user email is invalid");
-  }
-
-  const domain = (env.MCP_OAUTH_ALLOWED_EMAIL_DOMAIN ?? env.PUBLISHER_EMAIL_DOMAIN)?.trim().toLowerCase();
-  if (!domain) {
-    throw new HttpError(500, "missing_mcp_oauth_email_domain", "MCP OAuth allowed email domain is not configured");
-  }
-
-  const suffix = `@${domain}`;
-  if (!email.endsWith(suffix) || email.length <= suffix.length) {
-    throw new HttpError(403, "access_email_forbidden", `Cloudflare Access user must be a ${suffix} user`);
+    throw new HttpError(403, `invalid_${field.toLowerCase()}`, `${field} must be an email address`);
   }
 
   return email;
+}
+
+function hasGleanOAuthConfig(env: McpOAuthEnv): boolean {
+  return !!(
+    env.GLEAN_OAUTH_CLIENT_ID &&
+    env.GLEAN_OAUTH_CLIENT_SECRET &&
+    (env.GLEAN_OAUTH_DISCOVERY_URL ||
+      env.GLEAN_OAUTH_ISSUER ||
+      (env.GLEAN_OAUTH_AUTHORIZATION_URL && env.GLEAN_OAUTH_TOKEN_URL && env.GLEAN_OAUTH_USERINFO_URL))
+  );
 }
 
 function booleanEnv(value: string | undefined): boolean {

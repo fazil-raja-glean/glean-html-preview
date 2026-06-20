@@ -1,8 +1,10 @@
-import { constantTimeEqual, fromBase64Url, fromUtf8, randomBase64Url, toBase64Url, utf8 } from "./encoding";
+import { constantTimeEqual, fromBase64Url, randomBase64Url, toBase64Url, utf8 } from "./encoding";
+import { signText, signToken, verifyToken } from "./signed-token";
 
 const PASSWORD_ALGORITHM = "PBKDF2-SHA256";
 const PASSWORD_ITERATIONS = 100_000;
-const SIGNING_ALGORITHM = { name: "HMAC", hash: "SHA-256" };
+const ACCESS_COOKIE_PURPOSE = "viewer-access:v1";
+const HASHED_VIEWER_IP_PURPOSE = "viewer-ip:v1";
 
 export interface PasswordHash {
   algorithm: typeof PASSWORD_ALGORITHM;
@@ -65,9 +67,7 @@ export async function verifyPassword(
 }
 
 export async function signAccessCookie(payload: AccessCookiePayload, secret: string): Promise<string> {
-  const encodedPayload = toBase64Url(utf8(JSON.stringify(payload)));
-  const signature = await sign(encodedPayload, secret);
-  return `${encodedPayload}.${signature}`;
+  return signToken(payload, secret, ACCESS_COOKIE_PURPOSE);
 }
 
 export async function verifyAccessCookie(
@@ -77,17 +77,7 @@ export async function verifyAccessCookie(
   expectedPasswordVersion: number,
   now = Date.now(),
 ): Promise<boolean> {
-  const [encodedPayload, signature, extra] = token.split(".");
-  if (!encodedPayload || !signature || extra !== undefined) {
-    return false;
-  }
-
-  const expectedSignature = await sign(encodedPayload, secret);
-  if (!constantTimeEqual(signature, expectedSignature)) {
-    return false;
-  }
-
-  const payload = parseAccessCookiePayload(encodedPayload);
+  const payload = await verifyToken(token, secret, ACCESS_COOKIE_PURPOSE, parseAccessCookiePayload);
   if (!payload) {
     return false;
   }
@@ -104,28 +94,16 @@ export async function hashViewerIp(ipAddress: string | null, secret: string): Pr
     return null;
   }
 
-  const signature = await sign(ipAddress, secret);
+  const signature = await signText(ipAddress, secret, HASHED_VIEWER_IP_PURPOSE);
   return signature.slice(0, 24);
 }
 
-async function sign(payload: string, secret: string): Promise<string> {
-  const key = await crypto.subtle.importKey("raw", utf8(secret), SIGNING_ALGORITHM, false, ["sign"]);
-  const signature = await crypto.subtle.sign(SIGNING_ALGORITHM, key, utf8(payload));
-  return toBase64Url(new Uint8Array(signature));
-}
-
-function parseAccessCookiePayload(encodedPayload: string): AccessCookiePayload | null {
-  try {
-    const decoded = fromUtf8(fromBase64Url(encodedPayload));
-    const value: unknown = JSON.parse(decoded);
-    if (!isAccessCookiePayload(value)) {
-      return null;
-    }
-
-    return value;
-  } catch {
+function parseAccessCookiePayload(value: unknown): AccessCookiePayload | null {
+  if (!isAccessCookiePayload(value)) {
     return null;
   }
+
+  return value;
 }
 
 function isAccessCookiePayload(value: unknown): value is AccessCookiePayload {

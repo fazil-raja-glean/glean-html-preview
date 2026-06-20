@@ -1,9 +1,12 @@
 import { HttpError, jsonResponse } from "./http";
 import { type McpOAuthAccessContext, type McpOAuthEnv, requireMcpOAuthAccessToken } from "./oauth";
+import { parsePreviewPublishInput, type PreviewPublishInput } from "./publish-command";
 
 interface McpEnv extends McpOAuthEnv {
   PUBLISH_API?: Fetcher;
   API_BASE_URL?: string;
+  DEFAULT_EXPIRES_DAYS?: string;
+  MAX_HTML_BYTES?: string;
   PUBLISH_API_TOKEN?: string;
   PUBLISH_INTERNAL_SERVICE_TOKEN?: string;
 }
@@ -26,13 +29,7 @@ interface ToolResult {
   isError?: boolean;
 }
 
-interface PublishToolArguments {
-  title: string;
-  html: string;
-  password: string;
-  expiresAt?: string;
-  sourceUrl?: string;
-}
+type PublishToolArguments = PreviewPublishInput;
 
 const JSON_RPC_VERSION = "2.0";
 const MCP_PROTOCOL_VERSION = "2025-03-26";
@@ -196,7 +193,7 @@ async function handleToolsCall(
     return jsonRpcError(id, -32602, `Unknown tool: ${call.name}`);
   }
 
-  const args = parsePublishToolArguments(call.arguments);
+  const args = parsePublishToolArguments(call.arguments, env);
   return jsonRpcResult(id, await publishHtmlPreview(args, env, accessContext));
 }
 
@@ -211,51 +208,12 @@ function parseToolCall(params: unknown): { name: string; arguments: unknown } {
   };
 }
 
-function parsePublishToolArguments(value: unknown): PublishToolArguments {
+function parsePublishToolArguments(value: unknown, env: McpEnv): PublishToolArguments {
   if (!isRecord(value)) {
     throw new HttpError(400, "invalid_tool_arguments", "Tool arguments must be an object");
   }
 
-  const title = requireString(value.title, "title").trim();
-  const html = requireString(value.html, "html");
-  const password = requireString(value.password, "password");
-  const expiresAt = optionalString(value.expiresAt, "expiresAt");
-  const sourceUrl = optionalString(value.sourceUrl, "sourceUrl");
-
-  if (title.length < 1 || title.length > 160) {
-    throw new HttpError(400, "invalid_title", "Title must be between 1 and 160 characters");
-  }
-
-  if (password.length < 12 || password.length > 256) {
-    throw new HttpError(400, "invalid_password", "Password must be between 12 and 256 characters");
-  }
-
-  if (!/<html[\s>]/i.test(html)) {
-    throw new HttpError(400, "invalid_html", "HTML must be a complete document with an html element");
-  }
-
-  if (expiresAt) {
-    const expires = Date.parse(expiresAt);
-    if (!Number.isFinite(expires) || expires <= Date.now()) {
-      throw new HttpError(400, "invalid_expiry", "expiresAt must be a future ISO timestamp");
-    }
-  }
-
-  if (sourceUrl) {
-    try {
-      new URL(sourceUrl);
-    } catch {
-      throw new HttpError(400, "invalid_url", "sourceUrl must be a valid URL");
-    }
-  }
-
-  return {
-    title,
-    html,
-    password,
-    ...(expiresAt ? { expiresAt: new Date(Date.parse(expiresAt)).toISOString() } : {}),
-    ...(sourceUrl ? { sourceUrl: new URL(sourceUrl).toString() } : {}),
-  };
+  return parsePreviewPublishInput(value, env);
 }
 
 async function publishHtmlPreview(
@@ -385,26 +343,6 @@ function configuredUrl(value: string | undefined, name: string): URL {
 function requireConfiguredSecret(value: string | undefined, name: string): string {
   if (!value) {
     throw new HttpError(500, `missing_${name.toLowerCase()}`, `${name} is not configured`);
-  }
-
-  return value;
-}
-
-function requireString(value: unknown, field: string): string {
-  if (typeof value !== "string") {
-    throw new HttpError(400, "invalid_request", `${field} must be a string`);
-  }
-
-  return value;
-}
-
-function optionalString(value: unknown, field: string): string | undefined {
-  if (value === undefined || value === null || value === "") {
-    return undefined;
-  }
-
-  if (typeof value !== "string") {
-    throw new HttpError(400, "invalid_request", `${field} must be a string`);
   }
 
   return value;

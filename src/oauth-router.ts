@@ -3,6 +3,7 @@ import { methodNotAllowed } from "./http";
 import {
   handleOAuthAuthorizeRequest,
   handleOAuthAuthorizationServerMetadata,
+  handleOAuthCallbackRequest,
   handleOAuthProtectedResourceMetadata,
   handleOAuthTokenRequest,
 } from "./oauth";
@@ -32,6 +33,10 @@ const OAUTH_ROUTES: Record<
   },
   authorize: {
     handler: handleOAuthAuthorizeRequest,
+    method: "GET",
+  },
+  callback: {
+    handler: handleOAuthCallbackRequest,
     method: "GET",
   },
   token: {

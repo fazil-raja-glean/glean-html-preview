@@ -14,6 +14,7 @@ describe("route origin policy", () => {
     });
     expect(routeForPath("/mcp")).toEqual({ kind: "mcp", surface: "mcp" });
     expect(routeForPath("/oauth/token")).toEqual({ action: "token", kind: "oauth", surface: "mcp" });
+    expect(routeForPath("/oauth/callback")).toEqual({ action: "callback", kind: "oauth", surface: "mcp" });
     expect(routeForPath("/.well-known/oauth-authorization-server")).toEqual({
       action: "authorizationServerMetadata",
       kind: "oauth",
@@ -30,13 +31,23 @@ describe("route origin policy", () => {
       surface: "mcp",
     });
     expect(routeForPath("/oauth/authorize")).toEqual({ action: "authorize", kind: "oauth", surface: "mcp" });
+    expect(routeForPath("/admin")).toEqual({ action: "home", kind: "admin", surface: "api" });
+    expect(routeForPath("/admin/login")).toEqual({ action: "login", kind: "admin", surface: "api" });
+    expect(routeForPath("/admin/api/previews")).toEqual({ action: "previews", kind: "admin", surface: "api" });
+    expect(routeForPath("/admin/api/previews/abc123/password")).toEqual({
+      action: "rotatePassword",
+      kind: "admin",
+      slug: "abc123",
+      surface: "api",
+    });
     expect(routeForPath("/p/abc123/access")).toEqual({ kind: "access", slug: "abc123", surface: "preview" });
     expect(routeForPath("/p/abc123")).toEqual({ kind: "preview", slug: "abc123", surface: "preview" });
     expect(routeForPath("/nope")).toEqual({ kind: "unknown", surface: "unknown" });
   });
 
-  it("keeps publish routes on the API worker and preview routes on the preview worker", () => {
+  it("keeps publish and admin routes on the API worker and preview routes on the preview worker", () => {
     const apiRequest = requestOn(testApiOriginEnv.API_BASE_URL, "/v1/html-previews");
+    const adminRequest = requestOn(testApiOriginEnv.API_BASE_URL, "/admin");
     const previewRequest = requestOn(testPreviewOriginEnv.PUBLIC_BASE_URL, "/p/abc123");
 
     expect(
@@ -46,6 +57,9 @@ describe("route origin policy", () => {
         testApiOriginEnv,
         routeForPath("/v1/html-previews"),
       ),
+    ).toBeNull();
+    expect(
+      enforceConfiguredRouteOrigin(adminRequest, new URL(adminRequest.url), testApiOriginEnv, routeForPath("/admin")),
     ).toBeNull();
     expect(
       enforceConfiguredRouteOrigin(
@@ -60,6 +74,7 @@ describe("route origin policy", () => {
   it("keeps MCP routes only on the MCP worker", () => {
     const mcpRequest = requestOn(testMcpOriginEnv.MCP_BASE_URL, "/mcp");
     const oauthAuthorizeRequest = requestOn(testMcpOriginEnv.MCP_BASE_URL, "/oauth/authorize");
+    const oauthCallbackRequest = requestOn(testMcpOriginEnv.MCP_BASE_URL, "/oauth/callback");
     const oauthTokenRequest = requestOn(testMcpOriginEnv.MCP_BASE_URL, "/oauth/token");
     const apiMcpRequest = requestOn(testApiOriginEnv.API_BASE_URL, "/mcp");
     const previewMcpRequest = requestOn(testPreviewOriginEnv.PUBLIC_BASE_URL, "/mcp");
@@ -84,6 +99,14 @@ describe("route origin policy", () => {
       ),
     ).toBeNull();
     expect(
+      enforceConfiguredRouteOrigin(
+        oauthCallbackRequest,
+        new URL(oauthCallbackRequest.url),
+        testMcpOriginEnv,
+        routeForPath("/oauth/callback"),
+      ),
+    ).toBeNull();
+    expect(
       enforceConfiguredRouteOrigin(apiMcpRequest, new URL(apiMcpRequest.url), testApiOriginEnv, routeForPath("/mcp"))
         ?.status,
     ).toBe(404);
@@ -100,7 +123,9 @@ describe("route origin policy", () => {
 
   it("hides the wrong route surface on each production worker", () => {
     const previewPublishRequest = requestOn(testPreviewOriginEnv.PUBLIC_BASE_URL, "/v1/html-previews");
+    const previewAdminRequest = requestOn(testPreviewOriginEnv.PUBLIC_BASE_URL, "/admin");
     const apiPreviewRequest = requestOn(testApiOriginEnv.API_BASE_URL, "/p/abc123");
+    const mcpAdminRequest = requestOn(testMcpOriginEnv.MCP_BASE_URL, "/admin");
     const mcpPreviewRequest = requestOn(testMcpOriginEnv.MCP_BASE_URL, "/p/abc123");
 
     expect(
@@ -113,10 +138,26 @@ describe("route origin policy", () => {
     ).toBe(404);
     expect(
       enforceConfiguredRouteOrigin(
+        previewAdminRequest,
+        new URL(previewAdminRequest.url),
+        testPreviewOriginEnv,
+        routeForPath("/admin"),
+      )?.status,
+    ).toBe(404);
+    expect(
+      enforceConfiguredRouteOrigin(
         apiPreviewRequest,
         new URL(apiPreviewRequest.url),
         testApiOriginEnv,
         routeForPath("/p/abc123"),
+      )?.status,
+    ).toBe(404);
+    expect(
+      enforceConfiguredRouteOrigin(
+        mcpAdminRequest,
+        new URL(mcpAdminRequest.url),
+        testMcpOriginEnv,
+        routeForPath("/admin"),
       )?.status,
     ).toBe(404);
     expect(

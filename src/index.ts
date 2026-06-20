@@ -11,17 +11,26 @@ import {
   parseUnpublishCommand,
 } from "./publish-command";
 import { requirePublishPrincipal, type PublishPrincipal } from "./publish-principal";
+import { handleAdminRoute, type AdminRouteEnv } from "./admin-api";
+import { recordAudit } from "./audit";
+import { getCookie } from "./cookies";
+import {
+  createPreview,
+  getActivePreview,
+  getPreview,
+  rotatePreviewPassword,
+  softDeletePreview,
+  type PreviewRow,
+} from "./preview-store";
 import { routeForPath } from "./routes";
 import {
-  createSlug,
-  hashPassword,
   hashViewerIp,
   signAccessCookie,
   verifyAccessCookie,
   verifyPassword,
 } from "./security";
 
-interface Env extends McpOAuthEnv {
+interface Env extends McpOAuthEnv, AdminRouteEnv {
   HTML_PREVIEWS: R2Bucket;
   PREVIEW_DB: D1Database;
   EDGE_ACCESS_RATE_LIMITER?: RateLimit;
@@ -32,6 +41,19 @@ interface Env extends McpOAuthEnv {
   PUBLISH_ACCESS_TEAM_DOMAIN?: string;
   PUBLISH_ACCESS_AUD?: string;
   PUBLISH_ADMIN_LOCAL_BYPASS_SECRET?: string;
+  ADMIN_ALLOWED_EMAIL_DOMAIN?: string;
+  ADMIN_ALLOWED_EMAILS?: string;
+  ADMIN_LOCAL_BYPASS_EMAIL?: string;
+  ADMIN_SESSION_SECRET?: string;
+  ADMIN_SESSION_TTL_SECONDS?: string;
+  GLEAN_OAUTH_AUTHORIZATION_URL?: string;
+  GLEAN_OAUTH_CLIENT_ID?: string;
+  GLEAN_OAUTH_CLIENT_SECRET?: string;
+  GLEAN_OAUTH_DISCOVERY_URL?: string;
+  GLEAN_OAUTH_ISSUER?: string;
+  GLEAN_OAUTH_SCOPES?: string;
+  GLEAN_OAUTH_TOKEN_URL?: string;
+  GLEAN_OAUTH_USERINFO_URL?: string;
   COOKIE_SIGNING_SECRET: string;
   PASSWORD_PEPPER: string;
   API_BASE_URL?: string;
@@ -45,21 +67,6 @@ interface Env extends McpOAuthEnv {
   ACCESS_RATE_LIMIT_LOCK_SECONDS?: string;
   MAX_ACCESS_FAILURES_PER_IP?: string;
   MAX_ACCESS_FAILURES_PER_PREVIEW?: string;
-}
-
-interface PreviewRow {
-  slug: string;
-  title: string;
-  object_key: string;
-  password_hash: string;
-  password_salt: string;
-  password_iterations: number;
-  password_version: number;
-  publisher_email: string;
-  source_url: string | null;
-  created_at: string;
-  expires_at: string;
-  deleted_at: string | null;
 }
 
 interface AccessRateLimitRow {
@@ -161,6 +168,8 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
     }
     case "oauth":
       return handleOAuthRoute(request, env, route.action);
+    case "admin":
+      return handleAdminRoute(request, env, route);
     case "unpublish": {
       if (request.method !== "POST") {
         return methodNotAllowed();
@@ -220,60 +229,10 @@ async function publishPreview(
   principal: PublishPrincipal,
 ): Promise<Response> {
   const input = parsePublishCommand(await readJsonObject(request), env, principal);
-  const slug = createSlug();
-  const objectKey = `previews/${slug}/index.html`;
-  const now = new Date().toISOString();
-  const password = await hashPassword(input.password, env.PASSWORD_PEPPER);
-
-  await env.HTML_PREVIEWS.put(objectKey, input.html, {
-    httpMetadata: {
-      contentType: "text/html; charset=utf-8",
-    },
-    customMetadata: {
-      slug,
-      title: input.title,
-      publisherEmail: input.publisherEmail,
-      createdAt: now,
-    },
-  });
-
-  try {
-    await env.PREVIEW_DB.prepare(
-      `INSERT INTO previews (
-        slug,
-        title,
-        object_key,
-        password_hash,
-        password_salt,
-        password_iterations,
-        password_version,
-        publisher_email,
-        source_url,
-        created_at,
-        expires_at,
-        deleted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, NULL)`,
-    )
-      .bind(
-        slug,
-        input.title,
-        objectKey,
-        password.hash,
-        password.salt,
-        password.iterations,
-        input.publisherEmail,
-        input.sourceUrl,
-        now,
-        input.expiresAt,
-      )
-      .run();
-  } catch (error) {
-    await env.HTML_PREVIEWS.delete(objectKey);
-    throw error;
-  }
+  const preview = await createPreview(env, input);
 
   await recordAudit(env, {
-    slug,
+    slug: preview.slug,
     eventType: "published",
     actorEmail: input.publisherEmail,
     request,
@@ -282,8 +241,8 @@ async function publishPreview(
 
   return jsonResponse(
     {
-      url: `${publicBaseUrl(env, url, request)}/p/${slug}`,
-      slug,
+      url: `${publicBaseUrl(env, url, request)}/p/${preview.slug}`,
+      slug: preview.slug,
       expiresAt: input.expiresAt,
       status: "active",
     },
@@ -299,11 +258,7 @@ async function unpublishPreview(
 ): Promise<Response> {
   const existing = await getPreview(env, slug);
   const input = parseUnpublishCommand(await readJsonObject(request));
-  const deletedAt = new Date().toISOString();
-
-  await env.PREVIEW_DB.prepare("UPDATE previews SET deleted_at = ? WHERE slug = ? AND deleted_at IS NULL")
-    .bind(deletedAt, slug)
-    .run();
+  const deletedAt = await softDeletePreview(env, slug);
 
   if (input.deleteObject) {
     await env.HTML_PREVIEWS.delete(existing.object_key);
@@ -326,20 +281,8 @@ async function rotatePassword(
   slug: string,
   principal: PublishPrincipal,
 ): Promise<Response> {
-  await getPreview(env, slug);
   const input = parseRotatePasswordCommand(await readJsonObject(request));
-  const password = await hashPassword(input.password, env.PASSWORD_PEPPER);
-
-  await env.PREVIEW_DB.prepare(
-    `UPDATE previews
-      SET password_hash = ?,
-          password_salt = ?,
-          password_iterations = ?,
-          password_version = password_version + 1
-      WHERE slug = ? AND deleted_at IS NULL`,
-  )
-    .bind(password.hash, password.salt, password.iterations, slug)
-    .run();
+  await rotatePreviewPassword(env, slug, input.password);
 
   await recordAudit(env, {
     slug,
@@ -447,61 +390,6 @@ async function handleAccessRequest(request: Request, env: Env, slug: string): Pr
       "Cache-Control": "no-store",
     },
   });
-}
-
-async function getPreview(env: Env, slug: string): Promise<PreviewRow> {
-  const preview = await env.PREVIEW_DB.prepare("SELECT * FROM previews WHERE slug = ?").bind(slug).first<PreviewRow>();
-  if (!preview) {
-    throw new HttpError(404, "preview_not_found", "Preview not found");
-  }
-
-  return preview;
-}
-
-async function getActivePreview(env: Env, slug: string): Promise<PreviewRow> {
-  const preview = await getPreview(env, slug);
-
-  if (preview.deleted_at) {
-    throw new HttpError(410, "preview_unpublished", "Preview has been unpublished");
-  }
-
-  if (Date.parse(preview.expires_at) <= Date.now()) {
-    throw new HttpError(410, "preview_expired", "Preview has expired");
-  }
-
-  return preview;
-}
-
-async function recordAudit(
-  env: Env,
-  input: {
-    slug: string;
-    eventType: string;
-    actorEmail: string | null;
-    request: Request;
-    details: Record<string, unknown> | null;
-  },
-): Promise<void> {
-  const viewerIpHash = await hashViewerIp(input.request.headers.get("CF-Connecting-IP"), env.COOKIE_SIGNING_SECRET);
-  await env.PREVIEW_DB.prepare(
-    `INSERT INTO audit_events (
-      slug,
-      event_type,
-      actor_email,
-      viewer_ip_hash,
-      created_at,
-      details_json
-    ) VALUES (?, ?, ?, ?, ?, ?)`,
-  )
-    .bind(
-      input.slug,
-      input.eventType,
-      input.actorEmail,
-      viewerIpHash,
-      new Date().toISOString(),
-      input.details ? JSON.stringify(input.details) : null,
-    )
-    .run();
 }
 
 async function accessRateLimitScopes(env: Env, request: Request, slug: string): Promise<AccessRateLimitScope[]> {
@@ -678,22 +566,6 @@ function parseTimestamp(value: string | null | undefined): number | null {
 
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? timestamp : null;
-}
-
-function getCookie(request: Request, name: string): string | null {
-  const header = request.headers.get("Cookie");
-  if (!header) {
-    return null;
-  }
-
-  for (const cookie of header.split(";")) {
-    const [rawName, ...rawValueParts] = cookie.trim().split("=");
-    if (rawName === name) {
-      return rawValueParts.join("=");
-    }
-  }
-
-  return null;
 }
 
 function passwordForm(
