@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
 const targets = {
@@ -25,11 +25,19 @@ if (!target) {
 }
 
 const schema = readFileSync(new URL("../schema.sql", import.meta.url), "utf8");
+const localConfig = new URL("../wrangler.local.toml", import.meta.url);
+if (!existsSync(localConfig)) {
+  console.error("Missing wrangler.local.toml. Run `npm run config:init:local`, fill in real deployment values, then retry.");
+  process.exit(1);
+}
+
 const args = [
   "wrangler",
   "d1",
   "execute",
   target.database,
+  "--config",
+  "wrangler.local.toml",
   ...target.flags,
   "--command",
   schema,

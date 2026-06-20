@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { toBase64Url, utf8 } from "./encoding";
 import worker from "./index";
 import {
   claudeCodeClientId,
@@ -23,6 +24,10 @@ import {
 } from "./mcp-test-helpers";
 
 describe("MCP OAuth", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("exposes OAuth metadata and issues client-credentials access tokens", async () => {
     const env = createMcpTestEnv();
     const authorizationMetadata = await worker.fetch(
@@ -176,6 +181,128 @@ describe("MCP OAuth", () => {
     expect(response.headers.get("Set-Cookie")).toContain("html_oauth_state=");
   });
 
+  it("completes Glean OAuth callback from an id_token without userinfo", async () => {
+    const now = Date.parse("2026-06-20T12:00:00.000Z");
+    const key = await createTestRsaKey("glean-key");
+    const env = createGleanOAuthTestEnv({
+      GLEAN_OAUTH_ISSUER: "https://glean.example.test/oauth",
+      GLEAN_OAUTH_JWKS_URL: "https://glean.example.test/api/oauth/jwks",
+    });
+    const login = await startGleanOAuthLoginForTest(env);
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        jsonTestResponse({
+          access_token: "glean-access-token",
+          id_token: await signedJwt(key.privateKey, "glean-key", {
+            iss: "https://glean.example.test/oauth",
+            aud: "html-sharing",
+            exp: Math.floor(now / 1000) + 300,
+            email: "Publisher@Example.com",
+            name: "Publisher Example",
+          }),
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonTestResponse({
+          keys: [key.publicJwk],
+        }),
+      );
+
+    const callback = await worker.fetch(
+      new Request(`https://mcp.example.test/oauth/callback?code=glean-code&state=${login.state}`, {
+        headers: { Cookie: login.stateCookie },
+      }),
+      env as never,
+    );
+
+    expect(callback.status).toBe(302);
+    expect(callback.headers.get("Location")).toContain("/oauth/authorize");
+    expect(callback.headers.get("Set-Cookie")).toContain("html_oauth_identity=");
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects unsigned Glean id_tokens when userinfo is not configured", async () => {
+    const env = createGleanOAuthTestEnv();
+    const login = await startGleanOAuthLoginForTest(env);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonTestResponse({
+        access_token: "glean-access-token",
+        id_token: unsignedJwt({ email: "Publisher@Example.com" }),
+      }),
+    );
+
+    const callback = await worker.fetch(
+      new Request(`https://mcp.example.test/oauth/callback?code=glean-code&state=${login.state}`, {
+        headers: { Cookie: login.stateCookie },
+      }),
+      env as never,
+    );
+
+    expect(callback.status).toBe(401);
+    await expect(callback.json()).resolves.toMatchObject({
+      error: {
+        code: "missing_glean_id_token_verification",
+      },
+    });
+  });
+
+  it("uses discovered userinfo when the env userinfo URL is blank", async () => {
+    const env = createGleanOAuthTestEnv({
+      GLEAN_OAUTH_AUTHORIZATION_URL: "",
+      GLEAN_OAUTH_DISCOVERY_URL: "https://glean.example.test/.well-known/oauth-authorization-server",
+      GLEAN_OAUTH_TOKEN_URL: "",
+      GLEAN_OAUTH_USERINFO_URL: "",
+    });
+    const metadata = {
+      authorization_endpoint: "https://glean.example.test/oauth/authorize",
+      issuer: "https://glean.example.test/oauth",
+      jwks_uri: "https://glean.example.test/api/oauth/jwks",
+      token_endpoint: "https://glean.example.test/oauth/token",
+      userinfo_endpoint: "https://glean.example.test/oauth/userinfo",
+    };
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonTestResponse(metadata))
+      .mockResolvedValueOnce(jsonTestResponse(metadata))
+      .mockResolvedValueOnce(jsonTestResponse({ access_token: "glean-access-token" }))
+      .mockResolvedValueOnce(jsonTestResponse({ email: "Publisher@Example.com", name: "Publisher Example" }));
+
+    const login = await startGleanOAuthLoginForTest(env);
+    const callback = await worker.fetch(
+      new Request(`https://mcp.example.test/oauth/callback?code=glean-code&state=${login.state}`, {
+        headers: { Cookie: login.stateCookie },
+      }),
+      env as never,
+    );
+
+    const fetchUrls = vi.mocked(globalThis.fetch).mock.calls.map(([input]) => String(input));
+    expect(callback.status).toBe(302);
+    expect(fetchUrls).toContain("https://glean.example.test/oauth/userinfo");
+  });
+
+  it("returns a typed OAuth error when Glean returns non-JSON", async () => {
+    const env = createGleanOAuthTestEnv();
+    const login = await startGleanOAuthLoginForTest(env);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("<!doctype html><title>login</title>", {
+        headers: { "Content-Type": "text/html" },
+      }),
+    );
+
+    const callback = await worker.fetch(
+      new Request(`https://mcp.example.test/oauth/callback?code=glean-code&state=${login.state}`, {
+        headers: { Cookie: login.stateCookie },
+      }),
+      env as never,
+    );
+
+    expect(callback.status).toBe(401);
+    await expect(callback.json()).resolves.toMatchObject({
+      error: {
+        code: "glean_token_response_not_json",
+      },
+    });
+  });
+
   it("rejects wrong OAuth client credentials", async () => {
     const response = await requestAccessTokenResponse({
       clientId: "wrong",
@@ -318,3 +445,107 @@ describe("MCP OAuth", () => {
     });
   });
 });
+
+function createGleanOAuthTestEnv(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return createMcpTestEnv({
+    WORKER_ROLE: "mcp",
+    MCP_BASE_URL: "https://mcp.example.test",
+    MCP_OAUTH_LOCAL_BYPASS_EMAIL: undefined,
+    ADMIN_SESSION_SECRET: "dev-admin-session-secret",
+    GLEAN_OAUTH_AUTHORIZATION_URL: "https://glean.example.test/oauth/authorize",
+    GLEAN_OAUTH_TOKEN_URL: "https://glean.example.test/oauth/token",
+    GLEAN_OAUTH_CLIENT_ID: "html-sharing",
+    GLEAN_OAUTH_CLIENT_SECRET: "secret",
+    GLEAN_OAUTH_SCOPES: "openid email",
+    ...overrides,
+  });
+}
+
+async function startGleanOAuthLoginForTest(env: Record<string, unknown>): Promise<{ state: string; stateCookie: string }> {
+  const authorizeUrl = new URL("https://mcp.example.test/oauth/authorize");
+  authorizeUrl.searchParams.set("response_type", "code");
+  authorizeUrl.searchParams.set("client_id", codexClientId);
+  authorizeUrl.searchParams.set("redirect_uri", codexRedirectUri);
+  authorizeUrl.searchParams.set("scope", oauthScope);
+  authorizeUrl.searchParams.set("code_challenge", await s256CodeChallenge("verifier"));
+  authorizeUrl.searchParams.set("code_challenge_method", "S256");
+
+  const response = await worker.fetch(new Request(authorizeUrl), env as never);
+  expect(response.status).toBe(302);
+  const gleanAuthorizeUrl = new URL(response.headers.get("Location") ?? "");
+  const state = gleanAuthorizeUrl.searchParams.get("state") ?? "";
+  const stateCookie = (response.headers.get("Set-Cookie") ?? "").split(";")[0];
+  expect(state).not.toBe("");
+  expect(stateCookie).toContain("html_oauth_state=");
+  return {
+    state,
+    stateCookie,
+  };
+}
+
+function jsonTestResponse(value: unknown): Response {
+  return new Response(JSON.stringify(value), {
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function unsignedJwt(payload: Record<string, unknown>): string {
+  return [
+    base64UrlJson({ alg: "none", typ: "JWT" }),
+    base64UrlJson(payload),
+    "signature",
+  ].join(".");
+}
+
+function base64UrlJson(value: unknown): string {
+  return toBase64Url(utf8(JSON.stringify(value)));
+}
+
+async function createTestRsaKey(kid: string): Promise<{
+  privateKey: CryptoKey;
+  publicJwk: JsonWebKey & { kid: string };
+}> {
+  const keyPair = (await crypto.subtle.generateKey(
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      hash: "SHA-256",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+    },
+    true,
+    ["sign", "verify"],
+  )) as CryptoKeyPair;
+  const publicJwk = (await crypto.subtle.exportKey("jwk", keyPair.publicKey)) as JsonWebKey & { kid: string };
+  publicJwk.kid = kid;
+  publicJwk.alg = "RS256";
+  publicJwk.use = "sig";
+
+  return {
+    privateKey: keyPair.privateKey,
+    publicJwk,
+  };
+}
+
+async function signedJwt(
+  privateKey: CryptoKey,
+  kid: string,
+  payload: Record<string, unknown>,
+): Promise<string> {
+  const encodedHeader = base64UrlJson({
+    alg: "RS256",
+    kid,
+    typ: "JWT",
+  });
+  const encodedPayload = base64UrlJson(payload);
+  const signingInput = `${encodedHeader}.${encodedPayload}`;
+  const signature = await crypto.subtle.sign(
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      hash: "SHA-256",
+    },
+    privateKey,
+    utf8(signingInput),
+  );
+
+  return `${signingInput}.${toBase64Url(new Uint8Array(signature))}`;
+}

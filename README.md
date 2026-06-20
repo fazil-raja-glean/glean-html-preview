@@ -49,7 +49,21 @@ Do not commit real secrets. `.env`, `.dev.vars`, `.wrangler/`, and `node_modules
 | `MCP_OAUTH_CLIENT_SECRET` | no | no | yes | yes |
 | `MCP_OAUTH_TOKEN_SECRET` | no | no | yes | no |
 
-`GLEAN_OAUTH_CLIENT_ID`, `GLEAN_OAUTH_AUTHORIZATION_URL`, `GLEAN_OAUTH_TOKEN_URL`, `GLEAN_OAUTH_USERINFO_URL`, `GLEAN_OAUTH_SCOPES`, `ADMIN_ALLOWED_EMAIL_DOMAIN`, `ADMIN_ALLOWED_EMAILS`, `PUBLISH_ACCESS_TEAM_DOMAIN`, `PUBLISH_ACCESS_AUD`, `MCP_OAUTH_ALLOWED_REDIRECT_URIS`, `MCP_OAUTH_PUBLIC_CLIENT_IDS`, `MCP_OAUTH_SCOPES`, `MCP_OAUTH_REFRESH_TOKEN_TTL_SECONDS`, Worker names, R2 bucket names, D1 IDs, and rate-limit namespace IDs are configuration, not bearer secrets. They can live in `wrangler.toml`.
+`GLEAN_OAUTH_CLIENT_ID`, `GLEAN_OAUTH_ISSUER`, `GLEAN_OAUTH_AUTHORIZATION_URL`, `GLEAN_OAUTH_TOKEN_URL`, `GLEAN_OAUTH_USERINFO_URL`, `GLEAN_OAUTH_JWKS_URL`, `GLEAN_OAUTH_SCOPES`, `ADMIN_ALLOWED_EMAIL_DOMAIN`, `ADMIN_ALLOWED_EMAILS`, `PUBLISH_ACCESS_TEAM_DOMAIN`, `PUBLISH_ACCESS_AUD`, `MCP_OAUTH_ALLOWED_REDIRECT_URIS`, `MCP_OAUTH_PUBLIC_CLIENT_IDS`, `MCP_OAUTH_SCOPES`, `MCP_OAUTH_REFRESH_TOKEN_TTL_SECONDS`, Worker names, R2 bucket names, D1 IDs, and rate-limit namespace IDs are configuration, not bearer secrets. Because this repo is public, the committed `wrangler.toml` keeps those values as placeholders. Put real deployment IDs and URLs in ignored `wrangler.local.toml`.
+
+## Config Files
+
+- `wrangler.toml` is the committed public template. Keep it free of real Cloudflare IDs, real worker URLs, real emails, and secrets.
+- `wrangler.local.toml` is ignored by git. Use it for real Cloudflare resource IDs, real worker URLs, and local deployment settings.
+- `.dev.vars` is ignored by git. Use it only for local secrets.
+
+Initialize the local config:
+
+```sh
+npm run config:init:local
+```
+
+Then edit `wrangler.local.toml` and replace every placeholder with the real deployment values. Local dev and deploy scripts use `wrangler.local.toml`; `npm run deploy:dry-run` validates the committed public template, and `npm run deploy:dry-run:local` validates your ignored local deployment config.
 
 ## Deploy MCP From Scratch
 
@@ -76,18 +90,18 @@ npx wrangler r2 bucket create html-sharing-previews-dev
 npx wrangler d1 create html-sharing-metadata-dev
 ```
 
-Put the returned D1 IDs into `wrangler.toml`:
+Put the returned D1 IDs into `wrangler.local.toml`:
 
 - top-level `[[d1_databases]].database_id`
 - top-level `[[d1_databases]].preview_database_id`
 - `[[env.api.d1_databases]].database_id`
 - `[[env.api.d1_databases]].preview_database_id`
 
-The R2 bucket names are also configured in `wrangler.toml`.
+The R2 bucket names are also configured in `wrangler.local.toml`.
 
 ### 3. Create rate-limit namespaces
 
-Create three Cloudflare Worker Rate Limiting namespaces, then put their IDs into `wrangler.toml`:
+Create three Cloudflare Worker Rate Limiting namespaces, then put their IDs into `wrangler.local.toml`:
 
 | Binding | Route | Current limit |
 | --- | --- | --- |
@@ -102,17 +116,21 @@ Create a Glean OAuth client for this deployment and allow-list these redirect UR
 - `${API_BASE_URL}/admin/oauth/callback`
 - `${MCP_BASE_URL}/oauth/callback`
 
-Set the Glean OAuth endpoints in `wrangler.toml` for both `env.api` and `env.mcp`:
+Set the Glean OAuth endpoints in `wrangler.local.toml` for both `env.api` and `env.mcp`:
 
 ```toml
 GLEAN_OAUTH_CLIENT_ID = "html-sharing-admin"
+GLEAN_OAUTH_ISSUER = "https://<glean-domain>/oauth"
 GLEAN_OAUTH_AUTHORIZATION_URL = "https://<glean-domain>/oauth/authorize"
 GLEAN_OAUTH_TOKEN_URL = "https://<glean-domain>/oauth/token"
-GLEAN_OAUTH_USERINFO_URL = "https://<glean-domain>/oauth/userinfo"
-GLEAN_OAUTH_SCOPES = "openid email profile"
+GLEAN_OAUTH_USERINFO_URL = "" # optional when Glean returns identity in id_token
+GLEAN_OAUTH_JWKS_URL = "https://<glean-domain>/api/oauth/jwks" # required when userinfo is blank
+GLEAN_OAUTH_SCOPES = "openid email"
 ```
 
-If Glean provides OpenID discovery for this OAuth client, you can set `GLEAN_OAUTH_ISSUER` or `GLEAN_OAUTH_DISCOVERY_URL` instead of the three endpoint URLs.
+This app only needs Glean OAuth for user identity, so keep `GLEAN_OAUTH_SCOPES` to identity scopes such as `openid email`. Do not add broad Glean Client API scopes like search or chat unless this Worker starts calling those APIs directly.
+
+If Glean provides OAuth authorization-server metadata for this OAuth client, you can set `GLEAN_OAUTH_DISCOVERY_URL` instead of the endpoint and JWKS URLs. If you set only `GLEAN_OAUTH_ISSUER`, the Worker uses it to discover missing OAuth metadata.
 
 Configure self-service console authorization:
 
@@ -197,11 +215,13 @@ The schema is idempotent.
 
 ### 8. Deploy
 
-Run a dry run first:
+Run a local-config dry run first:
 
 ```sh
-npm run deploy:dry-run
+npm run deploy:dry-run:local
 ```
+
+For review or CI, `npm run deploy:dry-run` validates the committed public template without reading `wrangler.local.toml`.
 
 Expected dry-run shape:
 
@@ -363,7 +383,7 @@ In Glean Admin Console:
 14. Set **Authorization URL** to `${MCP_BASE_URL}/oauth/authorize`.
 15. Set **Token URL** to `${MCP_BASE_URL}/oauth/token`.
 16. Set **Scopes** to the configured `MCP_OAUTH_SCOPES`.
-17. Confirm the **Callback URL** is included in `MCP_OAUTH_ALLOWED_REDIRECT_URIS`.
+17. Confirm the **Callback URL** is included in `MCP_OAUTH_ALLOWED_REDIRECT_URIS`; for Glean this is usually the Glean backend `/tools/oauth/verify_code` URL shown on the page.
 18. Click **Initiate connection** or **Refresh tools**.
 19. Click **Save** if Glean asks you to save before discovery.
 20. Click **Fetch tools** or **Refresh tools**.
@@ -387,7 +407,7 @@ Codex, Claude Code, and Cursor should use public OAuth clients with S256 PKCE. C
 
 ```toml
 MCP_OAUTH_PUBLIC_CLIENT_IDS = "codex-html-sharing-mcp,claude-code-html-sharing-mcp,cursor-html-sharing-mcp"
-MCP_OAUTH_ALLOWED_REDIRECT_URIS = "https://your-glean-callback.example.com/oauth/callback,http://127.0.0.1:5555/callback,http://localhost:5555/callback,cursor://anysphere.cursor-mcp/oauth/callback"
+MCP_OAUTH_ALLOWED_REDIRECT_URIS = "https://your-glean-backend.example.com/tools/oauth/verify_code,http://127.0.0.1:5555/callback,http://localhost:5555/callback,cursor://anysphere.cursor-mcp/oauth/callback"
 MCP_OAUTH_REQUIRE_USER_AUTH = "true"
 MCP_OAUTH_REFRESH_TOKEN_TTL_SECONDS = "2592000"
 ```
@@ -478,6 +498,7 @@ GLEAN_OAUTH_CLIENT_SECRET=$LOCAL_GLEAN_OAUTH_CLIENT_SECRET
 GLEAN_OAUTH_AUTHORIZATION_URL=http://localhost:8787/oauth/dev/authorize
 GLEAN_OAUTH_TOKEN_URL=http://localhost:8787/oauth/dev/token
 GLEAN_OAUTH_USERINFO_URL=http://localhost:8787/oauth/dev/userinfo
+GLEAN_OAUTH_SCOPES=openid email
 PUBLISH_ADMIN_LOCAL_BYPASS_SECRET=$LOCAL_ADMIN_BYPASS_SECRET
 COOKIE_SIGNING_SECRET=$LOCAL_COOKIE_SIGNING_SECRET
 PASSWORD_PEPPER=$LOCAL_PASSWORD_PEPPER

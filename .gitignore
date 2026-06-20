@@ -3,4 +3,5 @@ node_modules/
 dist/
 .env
 .dev.vars
+wrangler.local.toml
 coverage/

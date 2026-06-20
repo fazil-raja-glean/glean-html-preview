@@ -51,6 +51,7 @@ interface Env extends McpOAuthEnv, AdminRouteEnv {
   GLEAN_OAUTH_CLIENT_SECRET?: string;
   GLEAN_OAUTH_DISCOVERY_URL?: string;
   GLEAN_OAUTH_ISSUER?: string;
+  GLEAN_OAUTH_JWKS_URL?: string;
   GLEAN_OAUTH_SCOPES?: string;
   GLEAN_OAUTH_TOKEN_URL?: string;
   GLEAN_OAUTH_USERINFO_URL?: string;

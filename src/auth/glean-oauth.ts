@@ -1,6 +1,13 @@
 import { randomBase64Url, toBase64Url, utf8 } from "../encoding";
 import { getCookie } from "../cookies";
 import { HttpError } from "../http";
+import {
+  decodeJwt,
+  jwtClaimsAreValid,
+  parseRsaPublicJwks,
+  verifyRs256JwtSignature,
+  type RsaPublicJwk,
+} from "../jwt";
 import { isLocalDevelopmentRequest } from "../origin-policy";
 import { signToken, verifyToken } from "../signed-token";
 import {
@@ -19,6 +26,7 @@ export interface GleanOAuthEnv extends IdentitySessionEnv {
   GLEAN_OAUTH_CLIENT_SECRET?: string;
   GLEAN_OAUTH_DISCOVERY_URL?: string;
   GLEAN_OAUTH_ISSUER?: string;
+  GLEAN_OAUTH_JWKS_URL?: string;
   GLEAN_OAUTH_SCOPES?: string;
   GLEAN_OAUTH_TOKEN_URL?: string;
   GLEAN_OAUTH_USERINFO_URL?: string;
@@ -39,9 +47,11 @@ interface GleanOAuthConfig {
   authorizationUrl: string;
   clientId: string;
   clientSecret: string;
+  issuer?: string;
+  jwksUrl?: string;
   scopes: string;
   tokenUrl: string;
-  userinfoUrl: string;
+  userinfoUrl?: string;
 }
 
 interface OAuthStatePayload {
@@ -51,9 +61,17 @@ interface OAuthStatePayload {
   state: string;
 }
 
-const DEFAULT_GLEAN_OAUTH_SCOPES = "openid email profile";
+interface CachedGleanJwks {
+  expiresAt: number;
+  keys: RsaPublicJwk[];
+}
+
+const DEFAULT_GLEAN_OAUTH_SCOPES = "openid email";
+const GLEAN_JWKS_CACHE_MS = 10 * 60 * 1000;
+const JWT_CLOCK_SKEW_SECONDS = 60;
 const OAUTH_STATE_TTL_SECONDS = 10 * 60;
 const OAUTH_STATE_PURPOSE = "glean-oauth-state:v1";
+const gleanJwksCache = new Map<string, CachedGleanJwks>();
 
 export const ADMIN_GLEAN_OAUTH_FLOW: GleanOAuthFlow = {
   kind: "admin",
@@ -183,10 +201,33 @@ async function exchangeCodeForGleanUser(
     throw new HttpError(401, "glean_token_exchange_failed", "Glean OAuth token exchange failed");
   }
 
-  const tokenBody = await tokenResponse.json() as unknown;
+  const tokenBody = await readJsonResponse(
+    tokenResponse,
+    "glean_token_response_not_json",
+    "Glean OAuth token response was not valid JSON",
+  );
   const accessToken = isRecord(tokenBody) && typeof tokenBody.access_token === "string" ? tokenBody.access_token : null;
+  const idToken = isRecord(tokenBody) ? tokenBody.id_token : null;
+  const userFromIdToken = await verifiedIdTokenUser(idToken, config);
+  if (userFromIdToken) {
+    return userFromIdToken;
+  }
+
+  if (typeof idToken === "string" && !config.userinfoUrl) {
+    throw new HttpError(
+      401,
+      idTokenVerificationConfigured(config) ? "invalid_glean_id_token" : "missing_glean_id_token_verification",
+      idTokenVerificationConfigured(config)
+        ? "Glean identity token could not be verified"
+        : "Glean identity token verification is not configured",
+    );
+  }
+
   if (!accessToken) {
     throw new HttpError(401, "missing_glean_access_token", "Glean OAuth response did not include an access token");
+  }
+  if (!config.userinfoUrl) {
+    throw new HttpError(401, "missing_glean_user", "Glean OAuth response did not include an identity token");
   }
 
   const userinfoResponse = await fetch(config.userinfoUrl, {
@@ -199,7 +240,9 @@ async function exchangeCodeForGleanUser(
     throw new HttpError(401, "glean_userinfo_failed", "Glean userinfo lookup failed");
   }
 
-  const user = parseGleanUser(await userinfoResponse.json() as unknown);
+  const user = parseGleanUser(
+    await readJsonResponse(userinfoResponse, "glean_userinfo_not_json", "Glean userinfo response was not valid JSON"),
+  );
   if (!user) {
     throw new HttpError(401, "missing_glean_user", "Glean userinfo did not include an email address");
   }
@@ -211,25 +254,33 @@ async function gleanOAuthConfig(env: GleanOAuthEnv): Promise<GleanOAuthConfig> {
   const discovered = await discoveredOAuthConfig(env);
   return {
     authorizationUrl: configuredUrl(
-      env.GLEAN_OAUTH_AUTHORIZATION_URL ?? optionalString(discovered?.authorization_endpoint),
+      optionalString(env.GLEAN_OAUTH_AUTHORIZATION_URL) ?? optionalString(discovered?.authorization_endpoint),
       "GLEAN_OAUTH_AUTHORIZATION_URL",
     ),
     tokenUrl: configuredUrl(
-      env.GLEAN_OAUTH_TOKEN_URL ?? optionalString(discovered?.token_endpoint),
+      optionalString(env.GLEAN_OAUTH_TOKEN_URL) ?? optionalString(discovered?.token_endpoint),
       "GLEAN_OAUTH_TOKEN_URL",
     ),
-    userinfoUrl: configuredUrl(
-      env.GLEAN_OAUTH_USERINFO_URL ?? optionalString(discovered?.userinfo_endpoint),
+    userinfoUrl: optionalConfiguredUrl(
+      optionalString(env.GLEAN_OAUTH_USERINFO_URL) ?? optionalString(discovered?.userinfo_endpoint),
       "GLEAN_OAUTH_USERINFO_URL",
+    ),
+    issuer: optionalConfiguredIssuer(
+      optionalString(discovered?.issuer) ?? optionalString(env.GLEAN_OAUTH_ISSUER),
+      "GLEAN_OAUTH_ISSUER",
+    ),
+    jwksUrl: optionalConfiguredUrl(
+      optionalString(env.GLEAN_OAUTH_JWKS_URL) ?? optionalString(discovered?.jwks_uri),
+      "GLEAN_OAUTH_JWKS_URL",
     ),
     clientId: requiredEnv(env.GLEAN_OAUTH_CLIENT_ID, "GLEAN_OAUTH_CLIENT_ID"),
     clientSecret: requiredEnv(env.GLEAN_OAUTH_CLIENT_SECRET, "GLEAN_OAUTH_CLIENT_SECRET"),
-    scopes: env.GLEAN_OAUTH_SCOPES?.trim() || DEFAULT_GLEAN_OAUTH_SCOPES,
+    scopes: optionalString(env.GLEAN_OAUTH_SCOPES) ?? DEFAULT_GLEAN_OAUTH_SCOPES,
   };
 }
 
 async function discoveredOAuthConfig(env: GleanOAuthEnv): Promise<Record<string, unknown> | null> {
-  const discoveryUrl = env.GLEAN_OAUTH_DISCOVERY_URL ?? discoveryUrlFromIssuer(env.GLEAN_OAUTH_ISSUER);
+  const discoveryUrl = optionalString(env.GLEAN_OAUTH_DISCOVERY_URL) ?? implicitDiscoveryUrlFromIssuer(env);
   if (!discoveryUrl) {
     return null;
   }
@@ -247,12 +298,23 @@ async function discoveredOAuthConfig(env: GleanOAuthEnv): Promise<Record<string,
   return isRecord(value) ? value : null;
 }
 
+function implicitDiscoveryUrlFromIssuer(env: GleanOAuthEnv): string | null {
+  const issuer = optionalString(env.GLEAN_OAUTH_ISSUER);
+  if (!issuer) {
+    return null;
+  }
+
+  const hasManualEndpoints = optionalString(env.GLEAN_OAUTH_AUTHORIZATION_URL) && optionalString(env.GLEAN_OAUTH_TOKEN_URL);
+  const hasManualIdentitySource = optionalString(env.GLEAN_OAUTH_USERINFO_URL) || optionalString(env.GLEAN_OAUTH_JWKS_URL);
+  return hasManualEndpoints && hasManualIdentitySource ? null : discoveryUrlFromIssuer(issuer);
+}
+
 function discoveryUrlFromIssuer(issuer: string | undefined): string | null {
   if (!issuer) {
     return null;
   }
 
-  return new URL("/.well-known/openid-configuration", issuer).toString();
+  return new URL("/.well-known/oauth-authorization-server", issuer).toString();
 }
 
 function callbackUrlForFlow(request: Request, env: GleanOAuthEnv, flow: GleanOAuthFlow): string {
@@ -322,6 +384,86 @@ function parseGleanUser(value: unknown): AuthenticatedGleanUser | null {
   };
 }
 
+async function verifiedIdTokenUser(value: unknown, config: GleanOAuthConfig): Promise<AuthenticatedGleanUser | null> {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  if (!idTokenVerificationConfigured(config)) {
+    return null;
+  }
+
+  const decoded = decodeJwt(value);
+  const kid = decoded?.header.kid;
+  if (!decoded || decoded.header.alg !== "RS256" || typeof kid !== "string") {
+    return null;
+  }
+
+  if (
+    !jwtClaimsAreValid(decoded, {
+      clockSkewSeconds: JWT_CLOCK_SKEW_SECONDS,
+      expectedAudience: config.clientId,
+      expectedIssuer: config.issuer,
+    })
+  ) {
+    return null;
+  }
+
+  const keys = await gleanJwks(config.jwksUrl);
+  let jwk = keys.find((candidate) => candidate.kid === kid);
+  if (!jwk) {
+    const refreshedKeys = await gleanJwks(config.jwksUrl, true);
+    jwk = refreshedKeys.find((candidate) => candidate.kid === kid);
+  }
+
+  if (!jwk || !(await verifyRs256JwtSignature(decoded, jwk))) {
+    return null;
+  }
+
+  return parseGleanUser(decoded.payload);
+}
+
+function idTokenVerificationConfigured(config: GleanOAuthConfig): config is GleanOAuthConfig & {
+  issuer: string;
+  jwksUrl: string;
+} {
+  return !!config.issuer && !!config.jwksUrl;
+}
+
+async function gleanJwks(jwksUrl: string, forceRefresh = false, now = Date.now()): Promise<RsaPublicJwk[]> {
+  const cached = gleanJwksCache.get(jwksUrl);
+  if (!forceRefresh && cached && cached.expiresAt > now) {
+    return cached.keys;
+  }
+
+  const response = await fetch(jwksUrl, {
+    headers: {
+      Accept: "application/json",
+    },
+  });
+  if (!response.ok) {
+    throw new HttpError(401, "glean_jwks_failed", "Glean signing keys lookup failed");
+  }
+
+  const keys = parseRsaPublicJwks(
+    await readJsonResponse(response, "glean_jwks_not_json", "Glean signing keys response was not valid JSON"),
+  );
+  gleanJwksCache.set(jwksUrl, {
+    keys,
+    expiresAt: now + GLEAN_JWKS_CACHE_MS,
+  });
+
+  return keys;
+}
+
+async function readJsonResponse(response: Response, errorCode: string, errorMessage: string): Promise<unknown> {
+  try {
+    return await response.json() as unknown;
+  } catch {
+    throw new HttpError(401, errorCode, errorMessage);
+  }
+}
+
 function normalizedEmailClaim(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -360,11 +502,12 @@ function safeReturnTo(value: string): string {
 }
 
 function requiredEnv(value: string | undefined, name: string): string {
-  if (!value) {
+  const trimmed = value?.trim();
+  if (!trimmed) {
     throw new HttpError(500, `missing_${name.toLowerCase()}`, `${name} is not configured`);
   }
 
-  return value;
+  return trimmed;
 }
 
 function configuredUrl(value: string | undefined, name: string): string {
@@ -374,6 +517,25 @@ function configuredUrl(value: string | undefined, name: string): string {
 
   try {
     return new URL(value).toString();
+  } catch {
+    throw new HttpError(500, `invalid_${name.toLowerCase()}`, `${name} is not a valid URL`);
+  }
+}
+
+function optionalConfiguredUrl(value: string | undefined, name: string): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? configuredUrl(trimmed, name) : undefined;
+}
+
+function optionalConfiguredIssuer(value: string | undefined, name: string): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  try {
+    new URL(trimmed);
+    return trimmed;
   } catch {
     throw new HttpError(500, `invalid_${name.toLowerCase()}`, `${name} is not a valid URL`);
   }

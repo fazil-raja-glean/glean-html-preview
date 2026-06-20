@@ -1,34 +1,25 @@
-import { constantTimeEqual, fromBase64Url, fromUtf8, utf8 } from "./encoding";
+import { constantTimeEqual } from "./encoding";
 import { HttpError } from "./http";
+import {
+  decodeJwt,
+  jwtClaimsAreValid,
+  parseRsaPublicJwks,
+  verifyRs256JwtSignature,
+  type RsaPublicJwk,
+} from "./jwt";
 
 export const CLOUDFLARE_ACCESS_JWT_HEADER = "Cf-Access-Jwt-Assertion";
 export const LOCAL_PUBLISH_ADMIN_SECRET_HEADER = "X-Publish-Admin-Secret";
 
 const ACCESS_CERTS_CACHE_MS = 10 * 60 * 1000;
 const JWT_CLOCK_SKEW_SECONDS = 60;
-const RS256_ALGORITHM = { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" };
 const PLACEHOLDER_PATTERN = /<|>|YOUR_|REPLACE_/i;
 
 type AccessCertsFetcher = typeof fetch;
 
-interface AccessJwk {
-  kid: string;
-  kty: "RSA";
-  n: string;
-  e: string;
-  alg?: string;
-}
-
 interface CachedAccessKeys {
-  keys: AccessJwk[];
+  keys: RsaPublicJwk[];
   expiresAt: number;
-}
-
-interface DecodedJwt {
-  signingInput: string;
-  signature: Uint8Array;
-  header: Record<string, unknown>;
-  payload: Record<string, unknown>;
 }
 
 export interface PublishAdminAccessEnv {
@@ -133,7 +124,15 @@ export async function verifyCloudflareAccessJwtIdentity(
   }
 
   const expectedTeamDomain = normalizeAccessTeamDomain(config.teamDomain);
-  if (!expectedTeamDomain || !tokenClaimsAreValid(decoded, expectedTeamDomain, config.audience, options.now)) {
+  if (
+    !expectedTeamDomain ||
+    !jwtClaimsAreValid(decoded, {
+      clockSkewSeconds: JWT_CLOCK_SKEW_SECONDS,
+      expectedAudience: config.audience,
+      expectedIssuer: expectedTeamDomain,
+      now: options.now,
+    })
+  ) {
     return null;
   }
 
@@ -154,7 +153,7 @@ export async function verifyCloudflareAccessJwtIdentity(
     return null;
   }
 
-  const verified = await verifyRs256Signature(decoded, jwk);
+  const verified = await verifyRs256JwtSignature(decoded, jwk);
   if (!verified) {
     return null;
   }
@@ -212,62 +211,6 @@ function isPlaceholder(value: string): boolean {
   return PLACEHOLDER_PATTERN.test(value);
 }
 
-function decodeJwt(token: string): DecodedJwt | null {
-  const [encodedHeader, encodedPayload, encodedSignature, extra] = token.split(".");
-  if (!encodedHeader || !encodedPayload || !encodedSignature || extra !== undefined) {
-    return null;
-  }
-
-  try {
-    const header = JSON.parse(fromUtf8(fromBase64Url(encodedHeader))) as unknown;
-    const payload = JSON.parse(fromUtf8(fromBase64Url(encodedPayload))) as unknown;
-    if (!isRecord(header) || !isRecord(payload)) {
-      return null;
-    }
-
-    return {
-      signingInput: `${encodedHeader}.${encodedPayload}`,
-      signature: fromBase64Url(encodedSignature),
-      header,
-      payload,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function tokenClaimsAreValid(
-  decoded: DecodedJwt,
-  expectedIssuer: string,
-  expectedAudience: string,
-  now = Date.now(),
-): boolean {
-  const nowSeconds = Math.floor(now / 1000);
-  const { payload } = decoded;
-
-  if (payload.iss !== expectedIssuer || !audienceIncludes(payload.aud, expectedAudience)) {
-    return false;
-  }
-
-  if (typeof payload.exp !== "number" || payload.exp <= nowSeconds - JWT_CLOCK_SKEW_SECONDS) {
-    return false;
-  }
-
-  if (typeof payload.nbf === "number" && payload.nbf > nowSeconds + JWT_CLOCK_SKEW_SECONDS) {
-    return false;
-  }
-
-  return true;
-}
-
-function audienceIncludes(value: unknown, expectedAudience: string): boolean {
-  if (typeof value === "string") {
-    return value === expectedAudience;
-  }
-
-  return Array.isArray(value) && value.some((item) => item === expectedAudience);
-}
-
 function normalizedEmailClaim(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -282,7 +225,7 @@ async function accessKeysForTeamDomain(
   fetcher: AccessCertsFetcher,
   now = Date.now(),
   forceRefresh = false,
-): Promise<AccessJwk[]> {
+): Promise<RsaPublicJwk[]> {
   const cached = accessJwksCache.get(teamDomain);
   if (!forceRefresh && cached && cached.expiresAt > now) {
     return cached.keys;
@@ -303,50 +246,6 @@ async function accessKeysForTeamDomain(
   return keys;
 }
 
-function parseAccessKeys(value: unknown): AccessJwk[] {
-  if (!isRecord(value) || !Array.isArray(value.keys)) {
-    return [];
-  }
-
-  return value.keys.filter(isAccessJwk);
-}
-
-function isAccessJwk(value: unknown): value is AccessJwk {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  return (
-    value.kty === "RSA" &&
-    typeof value.kid === "string" &&
-    typeof value.n === "string" &&
-    typeof value.e === "string" &&
-    (value.alg === undefined || value.alg === "RS256")
-  );
-}
-
-async function verifyRs256Signature(decoded: DecodedJwt, jwk: AccessJwk): Promise<boolean> {
-  try {
-    const key = await crypto.subtle.importKey(
-      "jwk",
-      {
-        kty: jwk.kty,
-        n: jwk.n,
-        e: jwk.e,
-        alg: "RS256",
-        ext: true,
-      },
-      RS256_ALGORITHM,
-      false,
-      ["verify"],
-    );
-
-    return crypto.subtle.verify(RS256_ALGORITHM, key, decoded.signature, utf8(decoded.signingInput));
-  } catch {
-    return false;
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
+function parseAccessKeys(value: unknown): RsaPublicJwk[] {
+  return parseRsaPublicJwks(value);
 }

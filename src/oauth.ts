@@ -370,12 +370,16 @@ function normalizedEmail(value: string, field: string): string {
 
 function hasGleanOAuthConfig(env: McpOAuthEnv): boolean {
   return !!(
-    env.GLEAN_OAUTH_CLIENT_ID &&
-    env.GLEAN_OAUTH_CLIENT_SECRET &&
-    (env.GLEAN_OAUTH_DISCOVERY_URL ||
-      env.GLEAN_OAUTH_ISSUER ||
-      (env.GLEAN_OAUTH_AUTHORIZATION_URL && env.GLEAN_OAUTH_TOKEN_URL && env.GLEAN_OAUTH_USERINFO_URL))
+    hasText(env.GLEAN_OAUTH_CLIENT_ID) &&
+    hasText(env.GLEAN_OAUTH_CLIENT_SECRET) &&
+    (hasText(env.GLEAN_OAUTH_DISCOVERY_URL) ||
+      hasText(env.GLEAN_OAUTH_ISSUER) ||
+      (hasText(env.GLEAN_OAUTH_AUTHORIZATION_URL) && hasText(env.GLEAN_OAUTH_TOKEN_URL)))
   );
+}
+
+function hasText(value: string | undefined): boolean {
+  return !!value?.trim();
 }
 
 function booleanEnv(value: string | undefined): boolean {
