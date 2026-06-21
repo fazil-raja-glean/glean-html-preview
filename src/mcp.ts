@@ -162,7 +162,7 @@ function publishHtmlPreviewTool(): Record<string, unknown> {
         },
         password: {
           type: "string",
-          minLength: 12,
+          minLength: 5,
           maxLength: 256,
           description: "Viewer password for the preview.",
         },

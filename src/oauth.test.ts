@@ -182,7 +182,7 @@ describe("MCP OAuth", () => {
   });
 
   it("completes Glean OAuth callback from an id_token without userinfo", async () => {
-    const now = Date.parse("2026-06-20T12:00:00.000Z");
+    const now = Date.now();
     const key = await createTestRsaKey("glean-key");
     const env = createGleanOAuthTestEnv({
       GLEAN_OAUTH_ISSUER: "https://glean.example.test/oauth",

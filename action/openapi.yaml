@@ -34,7 +34,7 @@ paths:
                   description: Complete HTML document to publish.
                 password:
                   type: string
-                  minLength: 12
+                  minLength: 5
                   description: Required viewer password. Share separately from the returned link.
                 expiresAt:
                   type: string

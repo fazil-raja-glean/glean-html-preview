@@ -167,7 +167,7 @@ function previewRow(previewBaseUrl: string, preview: AdminPreview, csrf: string)
       <div class="actions">
         <form method="post" action="/admin/api/previews/${encodeURIComponent(preview.slug)}/password" class="inline">
           <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
-          <input name="password" type="password" minlength="12" maxlength="256" autocomplete="new-password" required>
+          <input name="password" type="password" minlength="5" maxlength="256" autocomplete="new-password" required>
           <button type="submit">Reset</button>
         </form>
         <form method="post" action="/admin/api/previews/${encodeURIComponent(preview.slug)}/unpublish" class="inline">

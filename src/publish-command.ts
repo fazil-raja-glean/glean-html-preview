@@ -33,6 +33,8 @@ interface PublishCommandEnv {
 
 const DEFAULT_EXPIRES_DAYS = 60;
 const DEFAULT_MAX_HTML_BYTES = 2_000_000;
+const MIN_PASSWORD_LENGTH = 5;
+const MAX_PASSWORD_LENGTH = 256;
 
 export function parsePublishCommand(
   body: Record<string, unknown>,
@@ -145,8 +147,12 @@ function parseExpiresAt(value: unknown, env: PublishCommandEnv): string {
 }
 
 function validatePassword(password: string): void {
-  if (password.length < 12 || password.length > 256) {
-    throw new HttpError(400, "invalid_password", "Password must be between 12 and 256 characters");
+  if (password.length < MIN_PASSWORD_LENGTH || password.length > MAX_PASSWORD_LENGTH) {
+    throw new HttpError(
+      400,
+      "invalid_password",
+      `Password must be between ${MIN_PASSWORD_LENGTH} and ${MAX_PASSWORD_LENGTH} characters`,
+    );
   }
 }
 

@@ -69,7 +69,7 @@ describe("MCP endpoint", () => {
               required: ["title", "html", "password"],
               properties: {
                 password: {
-                  minLength: 12,
+                  minLength: 5,
                 },
               },
             },
