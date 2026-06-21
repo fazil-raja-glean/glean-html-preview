@@ -1,0 +1,138 @@
+# Copy this file to wrangler.local.toml, then replace placeholders with real
+# Cloudflare resource IDs, worker URLs, OAuth endpoints, and allowed domains.
+# Do not commit wrangler.local.toml.
+
+name = "html"
+main = "src/index.ts"
+compatibility_date = "2026-06-18"
+workers_dev = true
+preview_urls = false
+
+[vars]
+WORKER_ROLE = "preview"
+PUBLIC_BASE_URL = "https://html.your-workers-subdomain.workers.dev"
+PUBLISHER_EMAIL_DOMAIN = "example.com"
+TRUSTED_PUBLISHER_EMAIL = "html-sharing@example.com"
+DEFAULT_EXPIRES_DAYS = "60"
+MAX_HTML_BYTES = "2000000"
+ACCESS_RATE_LIMIT_WINDOW_SECONDS = "600"
+ACCESS_RATE_LIMIT_LOCK_SECONDS = "900"
+MAX_ACCESS_FAILURES_PER_IP = "8"
+MAX_ACCESS_FAILURES_PER_PREVIEW = "100"
+
+[[ratelimits]]
+name = "EDGE_ACCESS_RATE_LIMITER"
+namespace_id = "<access-rate-limit-namespace-id>"
+simple = { limit = 30, period = 60 }
+
+[[r2_buckets]]
+binding = "HTML_PREVIEWS"
+bucket_name = "html-sharing-previews-prod"
+preview_bucket_name = "html-sharing-previews-dev"
+
+[[d1_databases]]
+binding = "PREVIEW_DB"
+database_name = "html-sharing-metadata-prod"
+database_id = "<d1-production-database-id>"
+preview_database_id = "<d1-preview-database-id>"
+
+[env.api]
+name = "html-api"
+main = "src/index.ts"
+compatibility_date = "2026-06-18"
+workers_dev = true
+preview_urls = false
+
+[env.api.vars]
+WORKER_ROLE = "api"
+API_BASE_URL = "https://html-api.your-workers-subdomain.workers.dev"
+PUBLIC_BASE_URL = "https://html.your-workers-subdomain.workers.dev"
+PUBLISHER_EMAIL_DOMAIN = "example.com"
+TRUSTED_PUBLISHER_EMAIL = "html-sharing@example.com"
+ADMIN_ALLOWED_EMAIL_DOMAIN = "example.com"
+ADMIN_ALLOWED_EMAILS = ""
+ADMIN_SESSION_TTL_SECONDS = "28800"
+GLEAN_OAUTH_CLIENT_ID = "html-sharing-admin"
+GLEAN_OAUTH_ISSUER = "https://your-glean-domain.example.com/oauth"
+GLEAN_OAUTH_AUTHORIZATION_URL = "https://your-glean-domain.example.com/oauth/authorize"
+GLEAN_OAUTH_TOKEN_URL = "https://your-glean-domain.example.com/oauth/token"
+GLEAN_OAUTH_USERINFO_URL = ""
+GLEAN_OAUTH_JWKS_URL = "https://your-glean-domain.example.com/api/oauth/jwks"
+GLEAN_OAUTH_SCOPES = "openid email"
+PUBLISH_ACCESS_TEAM_DOMAIN = "https://<team-name>.cloudflareaccess.com"
+PUBLISH_ACCESS_AUD = "<access-application-aud-tag>"
+DEFAULT_EXPIRES_DAYS = "60"
+MAX_HTML_BYTES = "2000000"
+ACCESS_RATE_LIMIT_WINDOW_SECONDS = "600"
+ACCESS_RATE_LIMIT_LOCK_SECONDS = "900"
+MAX_ACCESS_FAILURES_PER_IP = "8"
+MAX_ACCESS_FAILURES_PER_PREVIEW = "100"
+
+[[env.api.ratelimits]]
+name = "EDGE_PUBLISH_RATE_LIMITER"
+namespace_id = "<publish-rate-limit-namespace-id>"
+simple = { limit = 20, period = 60 }
+
+[[env.api.r2_buckets]]
+binding = "HTML_PREVIEWS"
+bucket_name = "html-sharing-previews-prod"
+preview_bucket_name = "html-sharing-previews-dev"
+
+[[env.api.d1_databases]]
+binding = "PREVIEW_DB"
+database_name = "html-sharing-metadata-prod"
+database_id = "<d1-production-database-id>"
+preview_database_id = "<d1-preview-database-id>"
+
+[env.mcp]
+name = "html-mcp"
+main = "src/index.ts"
+compatibility_date = "2026-06-18"
+workers_dev = true
+preview_urls = false
+r2_buckets = []
+
+[env.mcp.vars]
+WORKER_ROLE = "mcp"
+MCP_BASE_URL = "https://html-mcp.your-workers-subdomain.workers.dev"
+API_BASE_URL = "https://html-api.your-workers-subdomain.workers.dev"
+PUBLIC_BASE_URL = "https://html.your-workers-subdomain.workers.dev"
+MCP_OAUTH_CLIENT_ID = "glean-html-sharing-mcp"
+MCP_OAUTH_PUBLIC_CLIENT_IDS = "codex-html-sharing-mcp,claude-code-html-sharing-mcp,cursor-html-sharing-mcp"
+MCP_OAUTH_ALLOWED_REDIRECT_URIS = "https://your-glean-backend.example.com/tools/oauth/verify_code,http://127.0.0.1:5555/callback,http://localhost:5555/callback,cursor://anysphere.cursor-mcp/oauth/callback"
+MCP_OAUTH_REQUIRE_USER_AUTH = "true"
+MCP_OAUTH_ALLOWED_EMAIL_DOMAIN = "example.com"
+MCP_OAUTH_SCOPES = "mcp:tools"
+MCP_OAUTH_ACCESS_TOKEN_TTL_SECONDS = "3600"
+MCP_OAUTH_REFRESH_TOKEN_TTL_SECONDS = "2592000"
+ADMIN_SESSION_TTL_SECONDS = "28800"
+GLEAN_OAUTH_CLIENT_ID = "html-sharing-admin"
+GLEAN_OAUTH_ISSUER = "https://your-glean-domain.example.com/oauth"
+GLEAN_OAUTH_AUTHORIZATION_URL = "https://your-glean-domain.example.com/oauth/authorize"
+GLEAN_OAUTH_TOKEN_URL = "https://your-glean-domain.example.com/oauth/token"
+GLEAN_OAUTH_USERINFO_URL = ""
+GLEAN_OAUTH_JWKS_URL = "https://your-glean-domain.example.com/api/oauth/jwks"
+GLEAN_OAUTH_SCOPES = "openid email"
+PUBLISHER_EMAIL_DOMAIN = "example.com"
+TRUSTED_PUBLISHER_EMAIL = "html-sharing@example.com"
+DEFAULT_EXPIRES_DAYS = "60"
+MAX_HTML_BYTES = "2000000"
+ACCESS_RATE_LIMIT_WINDOW_SECONDS = "600"
+ACCESS_RATE_LIMIT_LOCK_SECONDS = "900"
+MAX_ACCESS_FAILURES_PER_IP = "8"
+MAX_ACCESS_FAILURES_PER_PREVIEW = "100"
+
+[[env.mcp.ratelimits]]
+name = "EDGE_MCP_RATE_LIMITER"
+namespace_id = "<mcp-rate-limit-namespace-id>"
+simple = { limit = 30, period = 60 }
+
+[[env.mcp.d1_databases]]
+binding = "PREVIEW_DB"
+database_name = "html-sharing-metadata-prod"
+database_id = "<d1-production-database-id>"
+preview_database_id = "<d1-preview-database-id>"
+
+[[env.mcp.services]]
+binding = "PUBLISH_API"
+service = "html-api"

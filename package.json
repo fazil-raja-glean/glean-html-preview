@@ -17,6 +17,9 @@
     "deploy:dry-run": "wrangler deploy --env=\"\" --dry-run && wrangler deploy --env api --dry-run && wrangler deploy --env mcp --dry-run",
     "deploy:dry-run:local": "npm run deploy:preview:local -- --dry-run && npm run deploy:api:local -- --dry-run && npm run deploy:mcp:local -- --dry-run",
     "config:init:local": "test -f wrangler.local.toml || cp wrangler.toml wrangler.local.toml",
+    "setup:agent": "node scripts/setup-agent.mjs",
+    "verify:config": "node scripts/verify-config.mjs",
+    "smoke:mcp": "node scripts/smoke-mcp.mjs",
     "d1:migrate:local": "node scripts/apply-d1-schema.mjs local",
     "d1:migrate:dev": "node scripts/apply-d1-schema.mjs dev",
     "d1:migrate:prod": "node scripts/apply-d1-schema.mjs prod"
