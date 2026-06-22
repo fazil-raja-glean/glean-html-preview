@@ -1,3 +1,5 @@
+import { ADMIN_OAUTH_CALLBACK_PATH, MCP_OAUTH_CALLBACK_PATH } from "./oauth-paths";
+
 export type RouteSurface = "api" | "preview" | "mcp" | "both" | "unknown";
 
 export type OAuthRouteAction =
@@ -9,6 +11,8 @@ export type OAuthRouteAction =
 
 export type AdminRouteAction =
   | "home"
+  | "appScript"
+  | "appStyles"
   | "login"
   | "oauthCallback"
   | "logout"
@@ -22,7 +26,7 @@ export type AdminRouteAction =
 
 type StaticAdminRouteAction = Extract<
   AdminRouteAction,
-  "home" | "login" | "oauthCallback" | "logout" | "session" | "previews"
+  "home" | "appScript" | "appStyles" | "login" | "oauthCallback" | "logout" | "session" | "previews"
 >;
 
 type PreviewAdminRouteAction = Exclude<AdminRouteAction, StaticAdminRouteAction>;
@@ -32,7 +36,7 @@ const OAUTH_ROUTE_ACTIONS: Record<string, OAuthRouteAction> = {
   "/.well-known/oauth-protected-resource": "protectedResourceMetadata",
   "/.well-known/oauth-protected-resource/mcp": "protectedResourceMetadata",
   "/oauth/authorize": "authorize",
-  "/oauth/callback": "callback",
+  [MCP_OAUTH_CALLBACK_PATH]: "callback",
   "/oauth/token": "token",
 };
 
@@ -160,28 +164,28 @@ function oauthRouteAction(pathname: string): OAuthRouteAction | null {
 }
 
 function adminRouteForPath(pathname: string): AdminRoute | null {
-  if (pathname === "/admin") {
-    return { action: "home", kind: "admin", surface: "api" };
-  }
-
   const staticRoutes: Record<string, StaticAdminRouteAction> = {
-    "/admin/login": "login",
-    "/admin/oauth/callback": "oauthCallback",
-    "/admin/logout": "logout",
-    "/admin/api/session": "session",
-    "/admin/api/previews": "previews",
+    "/": "home",
+    "/app.js": "appScript",
+    "/app.css": "appStyles",
+    "/login": "login",
+    // The Glean OAuth redirect URI. Must match the URI registered with the Glean OAuth app.
+    [ADMIN_OAUTH_CALLBACK_PATH]: "oauthCallback",
+    "/logout": "logout",
+    "/api/session": "session",
+    "/api/previews": "previews",
   };
   const staticAction = staticRoutes[pathname];
   if (staticAction) {
     return { action: staticAction, kind: "admin", surface: "api" };
   }
 
-  const previewMatch = pathname.match(/^\/admin\/api\/previews\/([A-Za-z0-9_-]+)$/);
+  const previewMatch = pathname.match(/^\/api\/previews\/([A-Za-z0-9_-]+)$/);
   if (previewMatch) {
     return { action: "previewDetails", kind: "admin", slug: previewMatch[1], surface: "api" };
   }
 
-  const actionMatch = pathname.match(/^\/admin\/api\/previews\/([A-Za-z0-9_-]+)\/(password|unpublish|delete|html)$/);
+  const actionMatch = pathname.match(/^\/api\/previews\/([A-Za-z0-9_-]+)\/(password|unpublish|delete|html)$/);
   if (!actionMatch) {
     return null;
   }

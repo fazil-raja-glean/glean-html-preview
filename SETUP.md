@@ -24,7 +24,10 @@ Do not collapse these roles for production. `WORKER_ROLE=combined` exists for lo
 - `src/oauth.ts` - MCP OAuth metadata, authorization, token, and bearer validation.
 - `src/oauth-config.ts` - MCP OAuth clients, scopes, redirect allow-listing, and token TTLs.
 - `src/auth/glean-oauth.ts` - Glean OAuth identity flow for admin and MCP user login.
-- `src/admin-api.ts` and `src/admin-ui.ts` - self-service preview management.
+- `src/admin-api.ts` - self-service preview routes (serves the admin shell/assets, JSON APIs, in-UI publish).
+- `src/admin-ui.ts` - admin security headers (`ADMIN_SECURITY_HEADERS`).
+- `src/ui/admin.html`, `src/ui/admin.css`, `src/ui/admin.js` - editable source for the client-rendered admin console.
+- `src/admin-assets.ts` - generated from `src/ui/*` by `npm run build:admin`; do not edit by hand.
 - `src/security.ts` - password hashing and preview security helpers.
 - `schema.sql` - D1 schema.
 - `wrangler.toml` - committed public template.
@@ -134,7 +137,7 @@ These edge limits sit in front of app-level D1 throttling.
 
 Create a Glean OAuth client and allow-list:
 
-- `${API_BASE_URL}/admin/oauth/callback`
+- `${API_BASE_URL}/auth/callback`
 - `${MCP_BASE_URL}/oauth/callback`
 
 Configure both `env.api.vars` and `env.mcp.vars`:
@@ -155,13 +158,12 @@ Configure authorization:
 
 ```toml
 ADMIN_ALLOWED_EMAIL_DOMAIN = "example.com"
-ADMIN_ALLOWED_EMAILS = ""
 ADMIN_SESSION_TTL_SECONDS = "28800"
 MCP_OAUTH_ALLOWED_EMAIL_DOMAIN = "example.com"
 MCP_OAUTH_REQUIRE_USER_AUTH = "true"
 ```
 
-If `ADMIN_ALLOWED_EMAILS` is set, only those exact emails can enter `/admin`. Otherwise, any verified user in `ADMIN_ALLOWED_EMAIL_DOMAIN` can enter. Admin management remains owner-scoped by `publisher_email`.
+The console is domain-gated, not person-gated: any verified Glean user in `ADMIN_ALLOWED_EMAIL_DOMAIN` can sign in at the API origin root and self-serve. There is no per-person allowlist. Set `ADMIN_ALLOWED_EMAIL_DOMAIN` to the same domain as `MCP_OAUTH_ALLOWED_EMAIL_DOMAIN` so anyone who can use the MCP can also use the console. Management remains owner-scoped by `publisher_email`.
 
 ## 6. Configure MCP OAuth Clients
 
@@ -410,8 +412,15 @@ npm run dev
 Open the local admin UI:
 
 ```sh
-open http://localhost:8787/admin
+open http://localhost:8787/
 ```
+
+The admin console is a client-rendered app served at the API origin root: `/` serves a static shell that loads
+`/app.js` + `/app.css` and calls the `/api/*` JSON endpoints. The page lets you
+publish HTML (file, drag-and-drop, or paste), and after a publish or password reset it shows a
+copyable `link:`/`password:` block (passwords are hashed, so this is only available at set time).
+Editing the UI means editing `src/ui/admin.{html,css,js}` and re-running `npm run build:admin`
+(`check`, `test`, `dev`, and `deploy` run it automatically via pre-hooks).
 
 Publish locally through the API route:
 
@@ -514,7 +523,7 @@ Rotate `PASSWORD_PEPPER` only when invalidating existing preview passwords is ac
 
 ## Troubleshooting
 
-- `/admin` shows a Cloudflare 403 before Worker code runs: check whether a Cloudflare Access application is still protecting the API host.
+- The console (API origin root `/`) shows a Cloudflare 403 before Worker code runs: check whether a Cloudflare Access application is still protecting the API host.
 - MCP Worker dry-run does not list R2: expected. It should not have direct R2 access.
 - Publish through MCP fails with a machine token: expected. `publish_html_preview` needs a user-bound token with a verified email.
 - Preview URL points at the API host: check `PUBLIC_BASE_URL`; preview links must use the preview origin.

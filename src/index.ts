@@ -42,7 +42,6 @@ interface Env extends McpOAuthEnv, AdminRouteEnv {
   PUBLISH_ACCESS_AUD?: string;
   PUBLISH_ADMIN_LOCAL_BYPASS_SECRET?: string;
   ADMIN_ALLOWED_EMAIL_DOMAIN?: string;
-  ADMIN_ALLOWED_EMAILS?: string;
   ADMIN_LOCAL_BYPASS_EMAIL?: string;
   ADMIN_SESSION_SECRET?: string;
   ADMIN_SESSION_TTL_SECONDS?: string;

@@ -92,6 +92,22 @@ export function requireBearerToken(
   }
 }
 
+// Guards a user-supplied redirect target so it stays same-origin (a simple absolute path),
+// preventing open redirects. Returns `fallback` for anything else (e.g. "//evil.com" or "https://...").
+export function safeRelativePath(value: string | null | undefined, fallback: string): string {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) {
+    return fallback;
+  }
+
+  // Browsers treat backslashes in Location headers as path separators, so `/\evil.com`
+  // can become a network-path redirect. Reject raw and percent-encoded backslashes.
+  if (/[\u0000-\u001F\u007F\\]/.test(value) || /%5c/i.test(value)) {
+    return fallback;
+  }
+
+  return value;
+}
+
 export function methodNotAllowed(): Response {
   return jsonResponse(
     {

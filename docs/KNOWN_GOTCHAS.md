@@ -7,13 +7,14 @@ These are the traps previous work on this repo actually hit.
 - Run commands from the repo root. Scripts expect `package.json`, `wrangler.toml`, and `schema.sql` in the current directory.
 - If `npm run check` fails with `tsc: command not found`, run `npm install --ignore-scripts`.
 - Use `npm run setup:agent` for a first local pass. It creates ignored local files without overwriting existing ones.
+- The admin console lives in `src/ui/admin.{html,css,js}` and is compiled into the committed `src/admin-assets.ts` by `npm run build:admin`. Edit the `src/ui/*` files, not the generated `.ts`. `check`/`test`/`dev`/`deploy` run the codegen via pre-hooks; a raw `wrangler deploy` does not, so run `npm run build:admin` first or it ships stale UI.
 
 ## Cloudflare
 
 - The account-wide `workers.dev` subdomain must exist before deployed preview URLs work.
 - Use explicit deploy targets. The repo has a top-level preview Worker plus `env.api` and `env.mcp`; do not rely on an implicit Wrangler environment.
 - `env.mcp` should not list R2 bindings. That is intentional least privilege if `PUBLISH_API`, `PREVIEW_DB`, and `EDGE_MCP_RATE_LIMITER` are present.
-- If `/admin` returns a Cloudflare 403 before Worker code runs, check whether a Cloudflare Access application is still protecting the API host.
+- If the console (API origin root `/`) returns a Cloudflare 403 before Worker code runs, check whether a Cloudflare Access application is still protecting the API host.
 - Remote storage verification should use `--remote`; otherwise Wrangler may inspect local D1/R2 state.
 
 ## Security

@@ -19,7 +19,6 @@ export interface AdminSessionPayload extends AuthenticatedGleanUser {
 
 export interface IdentitySessionEnv {
   ADMIN_ALLOWED_EMAIL_DOMAIN?: string;
-  ADMIN_ALLOWED_EMAILS?: string;
   ADMIN_LOCAL_BYPASS_EMAIL?: string;
   ADMIN_SESSION_SECRET?: string;
   ADMIN_SESSION_TTL_SECONDS?: string;
@@ -40,7 +39,7 @@ export function sessionCookieName(kind: IdentitySessionKind): string {
 }
 
 export function sessionCookiePath(kind: IdentitySessionKind): string {
-  return kind === "admin" ? "/admin" : "/oauth";
+  return kind === "admin" ? "/" : "/oauth";
 }
 
 export async function createIdentitySession(
@@ -132,18 +131,10 @@ export function localBypassUser(request: Request, env: IdentitySessionEnv): Auth
   };
 }
 
+// The admin console is domain-gated, not person-gated: any verified Glean user in the
+// allowed domain can sign in and manage their own previews (owner-scoped by email),
+// mirroring the MCP's domain gate. There is intentionally no per-person allowlist.
 export function requireAllowedAdminUser(user: AuthenticatedGleanUser, env: IdentitySessionEnv): AuthenticatedGleanUser {
-  const allowedEmails = parseConfiguredList(env.ADMIN_ALLOWED_EMAILS).map((email) =>
-    normalizeEmail(email, "ADMIN_ALLOWED_EMAILS"),
-  );
-  if (allowedEmails.length > 0) {
-    if (!allowedEmails.includes(user.email)) {
-      throw new HttpError(403, "admin_email_forbidden", "This Glean user is not an allowed admin");
-    }
-
-    return user;
-  }
-
   const domain = allowedEmailDomain(env.ADMIN_ALLOWED_EMAIL_DOMAIN ?? env.PUBLISHER_EMAIL_DOMAIN);
   requireEmailDomain(user.email, domain, "admin_email_forbidden", "Glean user is not in the allowed admin domain");
   return user;
@@ -236,26 +227,4 @@ function requireEmailDomain(email: string, domain: string, code: string, message
   if (!email.endsWith(suffix) || email.length <= suffix.length) {
     throw new HttpError(403, code, message);
   }
-}
-
-function parseConfiguredList(value: string | undefined): string[] {
-  if (!value || value.trim() === "") {
-    return [];
-  }
-
-  const trimmed = value.trim();
-  if (trimmed.startsWith("[")) {
-    try {
-      const parsed: unknown = JSON.parse(trimmed);
-      if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) {
-        throw new Error("Expected a string array");
-      }
-
-      return parsed;
-    } catch {
-      throw new HttpError(500, "invalid_admin_allowed_emails", "ADMIN_ALLOWED_EMAILS must be a JSON string array");
-    }
-  }
-
-  return trimmed.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean);
 }

@@ -1,6 +1,6 @@
 import { randomBase64Url, toBase64Url, utf8 } from "../encoding";
 import { getCookie } from "../cookies";
-import { HttpError } from "../http";
+import { HttpError, safeRelativePath } from "../http";
 import {
   decodeJwt,
   jwtClaimsAreValid,
@@ -9,6 +9,7 @@ import {
   type RsaPublicJwk,
 } from "../jwt";
 import { isLocalDevelopmentRequest } from "../origin-policy";
+import { ADMIN_OAUTH_CALLBACK_PATH, MCP_OAUTH_CALLBACK_PATH } from "../oauth-paths";
 import { signToken, verifyToken } from "../signed-token";
 import {
   type AuthenticatedGleanUser,
@@ -76,18 +77,24 @@ const gleanJwksCache = new Map<string, CachedGleanJwks>();
 export const ADMIN_GLEAN_OAUTH_FLOW: GleanOAuthFlow = {
   kind: "admin",
   sessionKind: "admin",
-  callbackPath: "/admin/oauth/callback",
+  callbackPath: ADMIN_OAUTH_CALLBACK_PATH,
   stateCookieName: "html_admin_oauth_state",
-  stateCookiePath: "/admin",
+  stateCookiePath: stateCookiePathForCallback(ADMIN_OAUTH_CALLBACK_PATH),
 };
 
 export const MCP_GLEAN_OAUTH_FLOW: GleanOAuthFlow = {
   kind: "oauth",
   sessionKind: "oauth",
-  callbackPath: "/oauth/callback",
+  callbackPath: MCP_OAUTH_CALLBACK_PATH,
   stateCookieName: "html_oauth_state",
-  stateCookiePath: "/oauth",
+  stateCookiePath: stateCookiePathForCallback(MCP_OAUTH_CALLBACK_PATH),
 };
+
+// The OAuth state cookie must be scoped so the browser sends it back to the callback.
+// Deriving it from the callback's parent path keeps the two from drifting apart.
+function stateCookiePathForCallback(callbackPath: string): string {
+  return callbackPath.slice(0, callbackPath.lastIndexOf("/")) || "/";
+}
 
 export async function startGleanOAuthLogin(
   request: Request,
@@ -113,7 +120,7 @@ export async function startGleanOAuthLogin(
     {
       state,
       codeVerifier,
-      returnTo: safeReturnTo(returnTo),
+      returnTo: safeRelativePath(returnTo, "/"),
       exp: Math.floor(Date.now() / 1000) + OAUTH_STATE_TTL_SECONDS,
     } satisfies OAuthStatePayload,
     oauthStateSecret(env),
@@ -495,10 +502,6 @@ function oauthStateSecret(env: GleanOAuthEnv): string {
 
 function statePurpose(flow: GleanOAuthFlow): string {
   return `${OAUTH_STATE_PURPOSE}:${flow.kind}`;
-}
-
-function safeReturnTo(value: string): string {
-  return value.startsWith("/") && !value.startsWith("//") ? value : "/admin";
 }
 
 function requiredEnv(value: string | undefined, name: string): string {

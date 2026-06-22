@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HTML Sharing Admin</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>HTML Sharing Admin</h1>
+      <div class="account">
+        <span class="account-email" data-account-email></span>
+        <button type="button" class="btn" data-signout>Sign out</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="card" aria-labelledby="upload-heading">
+        <h2 id="upload-heading">Upload a new page</h2>
+        <p class="hint">
+          Give the page a title and a viewer password, then provide the HTML by choosing a file,
+          dropping it below, or pasting markup. Publishing returns a shareable link.
+        </p>
+
+        <form data-upload-form>
+          <div class="field-grid">
+            <label class="field">
+              <span class="field-label">Title</span>
+              <input name="title" type="text" maxlength="160" required placeholder="My demo page" />
+            </label>
+            <label class="field">
+              <span class="field-label">Viewer password</span>
+              <input
+                name="password"
+                type="password"
+                minlength="5"
+                maxlength="256"
+                autocomplete="new-password"
+                required
+              />
+            </label>
+          </div>
+
+          <div class="dropzone" data-dropzone tabindex="0">
+            <p class="dropzone-text">
+              Drag &amp; drop an <code>.html</code> file here, or
+              <button type="button" class="link-btn" data-file-trigger>choose a file</button>.
+            </p>
+            <p class="dropzone-file" data-file-name hidden></p>
+            <input type="file" accept=".html,text/html" data-file-input hidden />
+          </div>
+
+          <p class="or-divider"><span>or paste HTML</span></p>
+
+          <label class="field">
+            <span class="visually-hidden">Paste HTML</span>
+            <textarea
+              name="html"
+              rows="10"
+              spellcheck="false"
+              placeholder="&lt;!doctype html&gt;&lt;html&gt;…&lt;/html&gt;"
+              data-html-input
+            ></textarea>
+          </label>
+
+          <p class="form-error" data-upload-error hidden></p>
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary" data-upload-submit>Upload &amp; publish</button>
+          </div>
+        </form>
+
+        <div class="copy-block" data-upload-result hidden>
+          <p class="copy-block-title">Published. Share these with your viewer:</p>
+          <pre data-result-text></pre>
+          <button type="button" class="btn" data-result-copy>Copy link &amp; password</button>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="pages-heading">
+        <h2 id="pages-heading">Your hosted pages</h2>
+        <p class="form-error" data-list-error hidden></p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Title</th>
+                <th>Slug</th>
+                <th>Publisher</th>
+                <th>Created</th>
+                <th>Expires</th>
+                <th>Status</th>
+                <th>Password</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody data-rows></tbody>
+          </table>
+        </div>
+        <p class="empty" data-empty hidden>No pages yet.</p>
+      </section>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

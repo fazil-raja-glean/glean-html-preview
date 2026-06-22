@@ -8,10 +8,11 @@ import {
   requireIdentitySession,
   type AdminSessionPayload,
 } from "./auth/session";
-import { HttpError, jsonResponse, methodNotAllowed, readJsonObject } from "./http";
+import { HttpError, jsonResponse, methodNotAllowed, readJsonObject, safeRelativePath } from "./http";
 import { publicBaseUrl } from "./origin-policy";
-import { parseRotatePasswordCommand } from "./publish-command";
+import { parsePreviewPublishInput, parseRotatePasswordCommand } from "./publish-command";
 import {
+  createPreview,
   getPreviewForPublisher,
   hardDeletePreview,
   listPreviewsForPublisher,
@@ -22,12 +23,15 @@ import {
 } from "./preview-store";
 import { recordAudit, listAuditEvents } from "./audit";
 import type { AdminRoute } from "./routes";
-import { adminHtmlResponse, ADMIN_SECURITY_HEADERS } from "./admin-ui";
+import { ADMIN_SECURITY_HEADERS } from "./admin-ui";
+import { ADMIN_HTML, ADMIN_CSS, ADMIN_JS } from "./admin-assets";
 import { adminPreviewFromRow } from "./admin-preview";
 
 export interface AdminRouteEnv extends GleanOAuthEnv, PreviewStoreEnv {
   COOKIE_SIGNING_SECRET: string;
   PUBLIC_BASE_URL?: string;
+  DEFAULT_EXPIRES_DAYS?: string;
+  MAX_HTML_BYTES?: string;
 }
 
 interface AdminActionBody {
@@ -43,6 +47,12 @@ export async function handleAdminRoute(
   switch (route.action) {
     case "home":
       return request.method === "GET" ? handleAdminHome(request, env) : methodNotAllowed();
+    case "appScript":
+      return request.method === "GET"
+        ? handleAdminAsset(ADMIN_JS, "application/javascript; charset=utf-8")
+        : methodNotAllowed();
+    case "appStyles":
+      return request.method === "GET" ? handleAdminAsset(ADMIN_CSS, "text/css; charset=utf-8") : methodNotAllowed();
     case "login":
       return request.method === "GET" ? handleAdminLogin(request, env) : methodNotAllowed();
     case "oauthCallback":
@@ -52,7 +62,10 @@ export async function handleAdminRoute(
     case "session":
       return request.method === "GET" ? handleAdminSession(request, env) : methodNotAllowed();
     case "previews":
-      return request.method === "GET" ? handleListPreviews(request, env) : methodNotAllowed();
+      if (request.method === "GET") {
+        return handleListPreviews(request, env);
+      }
+      return request.method === "POST" ? handleCreatePreview(request, env) : methodNotAllowed();
     case "previewDetails":
       return request.method === "GET" ? handlePreviewDetails(request, env, route.slug) : methodNotAllowed();
     case "rotatePassword":
@@ -74,10 +87,20 @@ async function handleAdminHome(request: Request, env: AdminRouteEnv): Promise<Re
     return session;
   }
 
-  return adminHtmlResponse({
-    session,
-    previewBaseUrl: publicBaseUrl(env, new URL(request.url), request),
-    previews: (await listPreviewsForPublisher(env, session.email)).map(adminPreviewFromRow),
+  return new Response(ADMIN_HTML, {
+    headers: {
+      ...ADMIN_SECURITY_HEADERS,
+      "Content-Type": "text/html; charset=utf-8",
+    },
+  });
+}
+
+function handleAdminAsset(body: string, contentType: string): Response {
+  return new Response(body, {
+    headers: {
+      ...ADMIN_SECURITY_HEADERS,
+      "Content-Type": contentType,
+    },
   });
 }
 
@@ -96,7 +119,7 @@ async function handleAdminLogin(request: Request, env: AdminRouteEnv): Promise<R
 async function handleAdminLogout(request: Request, env: AdminRouteEnv): Promise<Response> {
   const session = await requireAdminSession(request, env);
   requireCsrfToken((await readAdminActionBody(request)).values.csrf as string | undefined, session.csrf);
-  return redirectResponse("/admin/login", {
+  return redirectResponse("/login", {
     "Set-Cookie": clearIdentitySessionCookie("admin"),
   });
 }
@@ -106,6 +129,7 @@ async function handleAdminSession(request: Request, env: AdminRouteEnv): Promise
   return jsonResponse({
     user: sessionUser(session),
     csrf: session.csrf,
+    previewBaseUrl: publicBaseUrl(env, new URL(request.url), request),
   });
 }
 
@@ -114,6 +138,33 @@ async function handleListPreviews(request: Request, env: AdminRouteEnv): Promise
   return jsonResponse({
     previews: (await listPreviewsForPublisher(env, session.email)).map(adminPreviewFromRow),
   });
+}
+
+async function handleCreatePreview(request: Request, env: AdminRouteEnv): Promise<Response> {
+  const session = await requireAdminSession(request, env);
+  const body = await readAdminActionBody(request);
+  requireCsrfToken(body.values.csrf as string | undefined, session.csrf);
+
+  const input = parsePreviewPublishInput(body.values, env);
+  const preview = await createPreview(env, { ...input, publisherEmail: session.email });
+
+  await recordAudit(env, {
+    slug: preview.slug,
+    eventType: "admin_published",
+    actorEmail: session.email,
+    request,
+    details: { sourceUrl: input.sourceUrl },
+  });
+
+  return jsonResponse(
+    {
+      slug: preview.slug,
+      url: `${publicBaseUrl(env, new URL(request.url), request)}/p/${preview.slug}`,
+      expiresAt: input.expiresAt,
+      status: "active",
+    },
+    201,
+  );
 }
 
 async function handlePreviewDetails(request: Request, env: AdminRouteEnv, slug: string): Promise<Response> {
@@ -201,7 +252,7 @@ async function requireAdminOrRedirect(request: Request, env: AdminRouteEnv): Pro
   } catch (error) {
     if (error instanceof HttpError && error.status === 401) {
       const requestUrl = new URL(request.url);
-      const login = new URL("/admin/login", requestUrl.origin);
+      const login = new URL("/login", requestUrl.origin);
       login.searchParams.set("return_to", `${requestUrl.pathname}${requestUrl.search}`);
       return redirectResponse(`${login.pathname}${login.search}`);
     }
@@ -246,7 +297,7 @@ async function readAdminActionBody(request: Request): Promise<AdminActionBody> {
 }
 
 function adminActionResponse(body: AdminActionBody, value: unknown): Response {
-  return body.isForm ? redirectResponse("/admin") : jsonResponse(value);
+  return body.isForm ? redirectResponse("/") : jsonResponse(value);
 }
 
 function redirectResponse(location: string, headers: HeadersInit = {}): Response {
@@ -261,8 +312,7 @@ function redirectResponse(location: string, headers: HeadersInit = {}): Response
 }
 
 function returnToFromRequest(request: Request): string {
-  const value = new URL(request.url).searchParams.get("return_to");
-  return value?.startsWith("/") && !value.startsWith("//") ? value : "/admin";
+  return safeRelativePath(new URL(request.url).searchParams.get("return_to"), "/");
 }
 
 function sessionUser(session: AdminSessionPayload): Record<string, string> {
