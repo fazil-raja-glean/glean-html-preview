@@ -9,7 +9,7 @@ The original goal was deliberately small: provide a short, reliable path from a 
 The project later grew into a three-surface deployment:
 
 - `html` is the preview surface. It serves viewer password gates and sandboxed HTML.
-- `html-api` is the publish and admin surface. It handles publish routes and the Glean-authenticated self-service admin UI.
+- `admin` is the publish and admin surface. It handles publish routes and the Glean-authenticated self-service admin UI.
 - `html-mcp` is the MCP surface. It exposes `publish_html_preview` through OAuth-backed MCP flows and calls the API Worker through a service binding.
 
 That split matters. The preview origin is where hostile HTML is rendered. The API and MCP origins are where trusted publish, admin, OAuth, and ownership decisions happen. Keeping those surfaces separate is part of the product, not incidental deployment detail.

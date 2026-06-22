@@ -1,4 +1,4 @@
-// Security headers for the admin surface (served by the html-api worker).
+// Security headers for the admin surface (served by the admin worker).
 // The admin console itself is a client-rendered static app: see src/ui/admin.html,
 // src/ui/admin.css, src/ui/admin.js (compiled into src/admin-assets.ts).
 //

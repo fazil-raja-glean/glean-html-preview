@@ -23,17 +23,17 @@ simple = { limit = 30, period = 60 }
 
 [[r2_buckets]]
 binding = "HTML_PREVIEWS"
-bucket_name = "html-sharing-previews-prod"
-preview_bucket_name = "html-sharing-previews-dev"
+bucket_name = "<r2-production-bucket-name>"
+preview_bucket_name = "<r2-preview-bucket-name>"
 
 [[d1_databases]]
 binding = "PREVIEW_DB"
-database_name = "html-sharing-metadata-prod"
+database_name = "<d1-production-database-name>"
 database_id = "<d1-production-database-id>"
 preview_database_id = "<d1-preview-database-id>"
 
 [env.api]
-name = "html-api"
+name = "admin"
 main = "src/index.ts"
 compatibility_date = "2026-06-18"
 workers_dev = true
@@ -41,7 +41,7 @@ preview_urls = false
 
 [env.api.vars]
 WORKER_ROLE = "api"
-API_BASE_URL = "https://html-api.your-workers-subdomain.workers.dev"
+API_BASE_URL = "https://admin.your-workers-subdomain.workers.dev"
 PUBLIC_BASE_URL = "https://html.your-workers-subdomain.workers.dev"
 PUBLISHER_EMAIL_DOMAIN = "example.com"
 TRUSTED_PUBLISHER_EMAIL = "html-sharing@example.com"
@@ -70,12 +70,12 @@ simple = { limit = 20, period = 60 }
 
 [[env.api.r2_buckets]]
 binding = "HTML_PREVIEWS"
-bucket_name = "html-sharing-previews-prod"
-preview_bucket_name = "html-sharing-previews-dev"
+bucket_name = "<r2-production-bucket-name>"
+preview_bucket_name = "<r2-preview-bucket-name>"
 
 [[env.api.d1_databases]]
 binding = "PREVIEW_DB"
-database_name = "html-sharing-metadata-prod"
+database_name = "<d1-production-database-name>"
 database_id = "<d1-production-database-id>"
 preview_database_id = "<d1-preview-database-id>"
 
@@ -90,7 +90,7 @@ r2_buckets = []
 [env.mcp.vars]
 WORKER_ROLE = "mcp"
 MCP_BASE_URL = "https://html-mcp.your-workers-subdomain.workers.dev"
-API_BASE_URL = "https://html-api.your-workers-subdomain.workers.dev"
+API_BASE_URL = "https://admin.your-workers-subdomain.workers.dev"
 PUBLIC_BASE_URL = "https://html.your-workers-subdomain.workers.dev"
 MCP_OAUTH_CLIENT_ID = "glean-html-sharing-mcp"
 MCP_OAUTH_PUBLIC_CLIENT_IDS = "codex-html-sharing-mcp,claude-code-html-sharing-mcp,cursor-html-sharing-mcp"
@@ -124,10 +124,10 @@ simple = { limit = 30, period = 60 }
 
 [[env.mcp.d1_databases]]
 binding = "PREVIEW_DB"
-database_name = "html-sharing-metadata-prod"
+database_name = "<d1-production-database-name>"
 database_id = "<d1-production-database-id>"
 preview_database_id = "<d1-preview-database-id>"
 
 [[env.mcp.services]]
 binding = "PUBLISH_API"
-service = "html-api"
+service = "admin"

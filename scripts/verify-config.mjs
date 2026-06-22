@@ -45,7 +45,7 @@ function verifyFile(path, options) {
   check(root.main === "src/index.ts", "top-level Worker main must be src/index.ts");
   check(root.preview_urls === false, "preview Worker preview_urls must be false");
   check(previewVars.WORKER_ROLE === "preview", "top-level WORKER_ROLE must be preview");
-  check(api.name === "html-api", "env.api Worker name must be html-api");
+  check(api.name === "admin", "env.api Worker name must be admin");
   check(api.preview_urls === false, "API Worker preview_urls must be false");
   check(apiVars.WORKER_ROLE === "api", "env.api WORKER_ROLE must be api");
   check(mcp.name === "html-mcp", "env.mcp Worker name must be html-mcp");
@@ -79,8 +79,8 @@ function verifyFile(path, options) {
   );
   check(hasBinding(arrays(doc, "env.mcp.ratelimits"), "EDGE_MCP_RATE_LIMITER"), "MCP rate limiter must exist");
   check(
-    arrays(doc, "env.mcp.services").some((service) => service.binding === "PUBLISH_API" && service.service === "html-api"),
-    "MCP Worker must call html-api through PUBLISH_API service binding",
+    arrays(doc, "env.mcp.services").some((service) => service.binding === "PUBLISH_API" && service.service === api.name),
+    "MCP Worker must call the API Worker through the PUBLISH_API service binding",
   );
 
   check(mcpVars.MCP_OAUTH_SCOPES === "mcp:tools", "MCP OAuth scope should default to mcp:tools");
@@ -113,8 +113,12 @@ function verifyFile(path, options) {
 
   if (options.kind === "template") {
     check(content.includes("your-workers-subdomain"), "public template should keep placeholder Worker hostnames");
+    check(content.includes("<r2-production-bucket-name>"), "public template should keep placeholder R2 bucket names");
+    check(content.includes("<d1-production-database-name>"), "public template should keep placeholder D1 database names");
     check(content.includes("<d1-production-database-id>"), "public template should keep placeholder D1 ids");
     check(content.includes("<mcp-rate-limit-namespace-id>"), "public template should keep placeholder rate-limit ids");
+    check(!content.includes("glean-share"), "public template should not contain deployment-specific Worker hostnames");
+    check(!content.includes("scio-prod-be"), "public template should not contain deployment-specific Glean hosts");
   }
 
   if (options.kind === "local") {

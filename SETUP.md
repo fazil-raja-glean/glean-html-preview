@@ -11,8 +11,8 @@ There are three production Workers:
 | Worker | Role | Has R2? | Has D1? | Main job |
 | --- | --- | --- | --- | --- |
 | `html` | `preview` | yes | yes | Serves password-gated preview pages and sandboxed HTML |
-| `html-api` | `api` | yes | yes | Publishes, manages, and deletes previews |
-| `html-mcp` | `mcp` | no | yes | Authenticates MCP clients and calls `html-api` through a service binding |
+| `admin` | `api` | yes | yes | Publishes, manages, and deletes previews |
+| `html-mcp` | `mcp` | no | yes | Authenticates MCP clients and calls `admin` through a service binding |
 
 Do not collapse these roles for production. `WORKER_ROLE=combined` exists for local development only.
 
@@ -88,7 +88,7 @@ Use separate origins:
 
 ```toml
 PUBLIC_BASE_URL = "https://html.your-workers-subdomain.workers.dev"
-API_BASE_URL = "https://html-api.your-workers-subdomain.workers.dev"
+API_BASE_URL = "https://admin.your-workers-subdomain.workers.dev"
 MCP_BASE_URL = "https://html-mcp.your-workers-subdomain.workers.dev"
 ```
 

@@ -2,6 +2,17 @@ node_modules/
 .wrangler/
 dist/
 .env
+.env.*
+!.env.example
 .dev.vars
+.dev.vars.*
+!.dev.vars.example
 wrangler.local.toml
 coverage/
+
+# Deployment-specific generated guides and local credential material.
+docs/html-sharing-mcp-install.html
+*.pem
+*.key
+*.p12
+*.pfx

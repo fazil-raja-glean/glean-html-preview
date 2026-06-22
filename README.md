@@ -9,7 +9,7 @@ This repo turns AI-generated HTML artifacts into shareable pages without treatin
 | Surface | Worker | Purpose |
 | --- | --- | --- |
 | Preview | `html` | Viewer password gate and sandboxed HTML serving |
-| API | `html-api` | Publish routes and Glean-authenticated self-service admin UI |
+| API | `admin` | Publish routes and Glean-authenticated self-service admin UI |
 | MCP | `html-mcp` | OAuth-backed MCP endpoint exposing `publish_html_preview` |
 
 Keep those surfaces separate. The preview Worker renders hostile HTML. The API and MCP Workers make trusted publish, admin, OAuth, and ownership decisions.

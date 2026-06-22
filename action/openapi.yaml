@@ -4,7 +4,7 @@ info:
   version: 0.1.0
   description: Legacy direct publish API for backend scripts or custom Actions. The preferred integration is the OAuth-backed MCP server at /mcp.
 servers:
-  - url: https://html-api.your-workers-subdomain.workers.dev
+  - url: https://admin.your-workers-subdomain.workers.dev
 paths:
   /v1/html-previews:
     post:
