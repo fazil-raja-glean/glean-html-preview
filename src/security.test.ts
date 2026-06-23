@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import { constantTimeEqual, fromBase64Url, toBase64Url, utf8 } from "./encoding";
-import { HTML_SECURITY_HEADERS } from "./index";
+import { previewHtmlSecurityHeaders } from "./preview-renderer";
 import { resolvePublishActorEmail } from "./publish-principal";
-import { hashPassword, signAccessCookie, verifyAccessCookie, verifyPassword } from "./security";
+import {
+  hashPassword,
+  signAccessCookie,
+  signPreviewAssetToken,
+  verifyAccessCookie,
+  verifyPassword,
+  verifyPreviewAssetToken,
+} from "./security";
 
 describe("encoding helpers", () => {
   it("round-trips base64url values", () => {
@@ -50,9 +57,30 @@ describe("access cookies", () => {
   });
 });
 
+describe("preview asset tokens", () => {
+  it("verifies signed asset URLs and rejects wrong or expired assets", async () => {
+    const token = await signPreviewAssetToken(
+      {
+        slug: "abc123",
+        assetId: "asset123",
+        passwordVersion: 1,
+        expiresAt: Date.now() + 60_000,
+      },
+      "secret",
+    );
+
+    await expect(verifyPreviewAssetToken(token, "secret", "abc123", "asset123", 1)).resolves.toBe(true);
+    await expect(verifyPreviewAssetToken(token, "secret", "abc123", "other-asset", 1)).resolves.toBe(false);
+    await expect(verifyPreviewAssetToken(token, "secret", "abc123", "asset123", 2)).resolves.toBe(false);
+    await expect(verifyPreviewAssetToken(token, "secret", "abc123", "asset123", 1, Date.now() + 120_000)).resolves.toBe(
+      false,
+    );
+  });
+});
+
 describe("preview HTML security headers", () => {
-  it("sandboxes uploaded HTML and blocks script execution", () => {
-    const csp = HTML_SECURITY_HEADERS["Content-Security-Policy"];
+  it("sandboxes uploaded HTML and blocks script execution by default", () => {
+    const csp = previewHtmlSecurityHeaders("https://preview.example.test")["Content-Security-Policy"];
 
     expect(csp).toContain("sandbox");
     expect(csp).toContain("script-src 'none'");
@@ -60,9 +88,28 @@ describe("preview HTML security headers", () => {
     expect(csp).toContain("form-action 'none'");
     expect(csp).toContain("object-src 'none'");
     expect(csp).toContain("worker-src 'none'");
-    expect(csp).toContain("img-src data: blob:");
+    expect(csp).toContain("img-src https://preview.example.test data: blob:");
     expect(csp).not.toContain("script-src 'unsafe-inline'");
-    expect(csp).not.toContain("https:");
+    expect(csp).not.toContain("img-src https: data:");
+  });
+
+  it("allows opt-in scripts without same-origin, network, forms, frames, or workers", () => {
+    const csp = previewHtmlSecurityHeaders("https://preview.example.test", {
+      allowScripts: true,
+    })["Content-Security-Policy"];
+
+    expect(csp).toContain("sandbox allow-scripts");
+    expect(csp).not.toContain("allow-same-origin");
+    expect(csp).toContain("script-src 'unsafe-inline'");
+    expect(csp).toContain("script-src-attr 'none'");
+    expect(csp).toContain("connect-src 'none'");
+    expect(csp).toContain("form-action 'none'");
+    expect(csp).toContain("frame-src 'none'");
+    expect(csp).toContain("worker-src 'none'");
+    expect(csp).toContain("navigate-to 'none'");
+    expect(csp).not.toContain("script-src 'none'");
+    expect(csp).not.toContain("connect-src https:");
+    expect(csp).not.toContain("script-src https:");
   });
 });
 

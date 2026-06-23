@@ -19,6 +19,28 @@ CREATE INDEX IF NOT EXISTS previews_publisher_email_idx
 CREATE INDEX IF NOT EXISTS previews_expires_at_idx
   ON previews (expires_at);
 
+CREATE TABLE IF NOT EXISTS preview_settings (
+  slug TEXT PRIMARY KEY,
+  allow_scripts INTEGER NOT NULL DEFAULT 0 CHECK (allow_scripts IN (0, 1)),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (slug) REFERENCES previews(slug) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS preview_assets (
+  slug TEXT NOT NULL,
+  asset_id TEXT NOT NULL,
+  object_key TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  byte_size INTEGER NOT NULL,
+  original_name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (slug, asset_id),
+  FOREIGN KEY (slug) REFERENCES previews(slug) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS preview_assets_slug_idx
+  ON preview_assets (slug);
+
 CREATE TABLE IF NOT EXISTS audit_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   slug TEXT NOT NULL,

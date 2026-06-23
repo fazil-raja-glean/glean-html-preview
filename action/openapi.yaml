@@ -31,7 +31,36 @@ paths:
                   maxLength: 160
                 html:
                   type: string
-                  description: Complete HTML document to publish.
+                  description: Complete HTML document to publish. Use cid:image-name.png references for images supplied through images.
+                images:
+                  type: array
+                  description: Optional image attachments stored separately in R2 and served through the preview password gate.
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required:
+                      - name
+                      - mimeType
+                      - dataBase64
+                    properties:
+                      name:
+                        type: string
+                        description: Unique cid name, for example proof.png.
+                      mimeType:
+                        type: string
+                        enum:
+                          - image/png
+                          - image/jpeg
+                          - image/webp
+                          - image/gif
+                          - image/avif
+                      dataBase64:
+                        type: string
+                        description: Base64 image bytes. Data URLs are accepted.
+                allowScripts:
+                  type: boolean
+                  default: false
+                  description: Opt in to local JavaScript execution. Scripts run in a sandbox without allow-same-origin, network access, forms, frames, or workers.
                 password:
                   type: string
                   minLength: 5

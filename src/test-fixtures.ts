@@ -1,5 +1,6 @@
 import type { AuditEventRow } from "./audit";
-import type { PreviewRow } from "./preview-store";
+import type { PreviewAssetRow } from "./preview-assets";
+import type { PreviewRow, PreviewSettingsRow } from "./preview-store";
 
 export const testOrigins = {
   apiBaseUrl: "https://api.example.test",
@@ -47,6 +48,8 @@ interface TestOAuthGrantRow {
 export function createTestPreviewDb(seedPreviews: PreviewRow[] = []): D1Database {
   const oauthGrants = new Map<string, TestOAuthGrantRow>();
   const previews = new Map(seedPreviews.map((preview) => [preview.slug, { ...preview }]));
+  const previewSettings = new Map<string, PreviewSettingsRow>();
+  const assets = new Map<string, PreviewAssetRow>();
   const auditEvents: AuditEventRow[] = [];
 
   return {
@@ -106,6 +109,30 @@ export function createTestPreviewDb(seedPreviews: PreviewRow[] = []): D1Database
             return d1Result<T>(1);
           }
 
+          if (normalizedQuery.startsWith("INSERT INTO PREVIEW_SETTINGS")) {
+            const [slug, allowScripts, createdAt] = statement.values;
+            previewSettings.set(String(slug), {
+              slug: String(slug),
+              allow_scripts: Number(allowScripts),
+              created_at: String(createdAt),
+            });
+            return d1Result<T>(1);
+          }
+
+          if (normalizedQuery.startsWith("INSERT INTO PREVIEW_ASSETS")) {
+            const [slug, assetId, objectKey, contentType, byteSize, originalName, createdAt] = statement.values;
+            assets.set(assetKey(String(slug), String(assetId)), {
+              slug: String(slug),
+              asset_id: String(assetId),
+              object_key: String(objectKey),
+              content_type: String(contentType) as PreviewAssetRow["content_type"],
+              byte_size: Number(byteSize),
+              original_name: String(originalName),
+              created_at: String(createdAt),
+            });
+            return d1Result<T>(1);
+          }
+
           if (normalizedQuery.startsWith("UPDATE PREVIEWS SET PASSWORD_HASH")) {
             const [passwordHash, passwordSalt, passwordIterations, slug] = statement.values;
             const preview = previews.get(String(slug));
@@ -133,6 +160,18 @@ export function createTestPreviewDb(seedPreviews: PreviewRow[] = []): D1Database
 
           if (normalizedQuery.startsWith("DELETE FROM PREVIEWS")) {
             return d1Result<T>(previews.delete(String(statement.values[0])) ? 1 : 0);
+          }
+
+          if (normalizedQuery.startsWith("DELETE FROM PREVIEW_ASSETS")) {
+            const slug = String(statement.values[0]);
+            let changes = 0;
+            for (const key of assets.keys()) {
+              if (key.startsWith(`${slug}:`)) {
+                assets.delete(key);
+                changes += 1;
+              }
+            }
+            return d1Result<T>(changes);
           }
 
           if (normalizedQuery.startsWith("INSERT INTO AUDIT_EVENTS")) {
@@ -193,9 +232,22 @@ export function createTestPreviewDb(seedPreviews: PreviewRow[] = []): D1Database
             return (previews.get(String(statement.values[0])) as T | undefined) ?? null;
           }
 
+          if (normalizedQuery.startsWith("SELECT * FROM PREVIEW_SETTINGS WHERE SLUG")) {
+            return (previewSettings.get(String(statement.values[0])) as T | undefined) ?? null;
+          }
+
+          if (normalizedQuery.startsWith("SELECT * FROM PREVIEW_ASSETS WHERE SLUG = ? AND ASSET_ID")) {
+            return (assets.get(assetKey(String(statement.values[0]), String(statement.values[1]))) as T | undefined) ?? null;
+          }
+
           return null;
         },
         async all<T = Record<string, unknown>>(): Promise<D1Result<T>> {
+          if (normalizedQuery.startsWith("SELECT * FROM PREVIEW_ASSETS WHERE SLUG")) {
+            const slug = String(statement.values[0]);
+            return d1Rows([...assets.values()].filter((asset) => asset.slug === slug) as T[]);
+          }
+
           if (normalizedQuery.startsWith("SELECT * FROM PREVIEWS WHERE LOWER(PUBLISHER_EMAIL)")) {
             const publisherEmail = String(statement.values[0]).toLowerCase();
             const limit = Number(statement.values[1] ?? 100);
@@ -230,10 +282,17 @@ export function createTestPreviewDb(seedPreviews: PreviewRow[] = []): D1Database
 
       return statement as D1PreparedStatement;
     },
+    async batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
+      const results = [];
+      for (const statement of statements) {
+        results.push(await statement.run<T>());
+      }
+      return results;
+    },
   } as D1Database;
 }
 
-export function createTestR2Bucket(initialObjects: Record<string, string> = {}): R2Bucket {
+export function createTestR2Bucket(initialObjects: Record<string, string | Uint8Array> = {}): R2Bucket {
   const objects = new Map(Object.entries(initialObjects));
   return {
     async get(key: string): Promise<R2ObjectBody | null> {
@@ -244,17 +303,36 @@ export function createTestR2Bucket(initialObjects: Record<string, string> = {}):
 
       return {
         body: new Response(value).body,
-        text: async () => value,
+        text: async () => (typeof value === "string" ? value : new TextDecoder().decode(value)),
+        arrayBuffer: async () =>
+          typeof value === "string" ? new TextEncoder().encode(value).buffer : value.buffer.slice(0),
       } as R2ObjectBody;
     },
     async put(key: string, value: string | ReadableStream | ArrayBuffer | ArrayBufferView | Blob): Promise<R2Object> {
-      objects.set(key, typeof value === "string" ? value : "");
+      objects.set(key, storedR2Value(value));
       return {} as R2Object;
     },
     async delete(key: string): Promise<void> {
       objects.delete(key);
     },
   } as R2Bucket;
+}
+
+function assetKey(slug: string, assetId: string): string {
+  return `${slug}:${assetId}`;
+}
+
+function storedR2Value(value: string | ReadableStream | ArrayBuffer | ArrayBufferView | Blob): string | Uint8Array {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value instanceof ArrayBuffer) {
+    return new Uint8Array(value);
+  }
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
+  }
+  return "";
 }
 
 function d1Result<T>(changes: number): D1Result<T> {

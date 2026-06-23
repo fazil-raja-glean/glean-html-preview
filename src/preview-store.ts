@@ -1,5 +1,16 @@
 import { HttpError } from "./http";
-import { createSlug, hashPassword } from "./security";
+import {
+  deletePreviewAssetRows,
+  deletePreviewObjects,
+  previewAssetInsertStatements,
+  putPreviewObjects,
+} from "./preview-asset-store";
+import {
+  previewAssetUploads,
+  type PreviewAssetUpload,
+  type PreviewImageInput,
+} from "./preview-assets";
+import { createSlug, hashPassword, type PasswordHash } from "./security";
 
 export interface PreviewStoreEnv {
   HTML_PREVIEWS: R2Bucket;
@@ -22,9 +33,21 @@ export interface PreviewRow {
   title: string;
 }
 
+export interface PreviewSettingsRow {
+  allow_scripts: number;
+  created_at: string;
+  slug: string;
+}
+
+export interface PreviewRenderOptions {
+  allowScripts: boolean;
+}
+
 export interface CreatePreviewInput {
+  allowScripts: boolean;
   expiresAt: string | null;
   html: string;
+  images: PreviewImageInput[];
   password: string;
   publisherEmail: string;
   sourceUrl: string | null;
@@ -34,53 +57,30 @@ export interface CreatePreviewInput {
 export async function createPreview(env: PreviewStoreEnv, input: CreatePreviewInput): Promise<PreviewRow> {
   const slug = createSlug();
   const objectKey = `previews/${slug}/index.html`;
+  const assets = previewAssetUploads(slug, input.images);
   const now = new Date().toISOString();
   const password = await hashPassword(input.password, env.PASSWORD_PEPPER);
+  const objectKeys = [objectKey, ...assets.map((asset) => asset.objectKey)];
 
-  await env.HTML_PREVIEWS.put(objectKey, input.html, {
-    httpMetadata: {
-      contentType: "text/html; charset=utf-8",
-    },
-    customMetadata: {
+  try {
+    await putPreviewObjects(env, {
       slug,
       title: input.title,
       publisherEmail: input.publisherEmail,
+      html: input.html,
+      objectKey,
+      assets,
       createdAt: now,
-    },
-  });
-
-  try {
-    await env.PREVIEW_DB.prepare(
-      `INSERT INTO previews (
-        slug,
-        title,
-        object_key,
-        password_hash,
-        password_salt,
-        password_iterations,
-        password_version,
-        publisher_email,
-        source_url,
-        created_at,
-        expires_at,
-        deleted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, NULL)`,
-    )
-      .bind(
-        slug,
-        input.title,
-        objectKey,
-        password.hash,
-        password.salt,
-        password.iterations,
-        input.publisherEmail,
-        input.sourceUrl,
-        now,
-        previewExpiresAtStorageValue(input.expiresAt),
-      )
-      .run();
+    });
+    await insertPreviewRows(env, input, {
+      slug,
+      objectKey,
+      password,
+      assets,
+      createdAt: now,
+    });
   } catch (error) {
-    await env.HTML_PREVIEWS.delete(objectKey);
+    await Promise.all(objectKeys.map((key) => env.HTML_PREVIEWS.delete(key)));
     throw error;
   }
 
@@ -97,6 +97,16 @@ export async function createPreview(env: PreviewStoreEnv, input: CreatePreviewIn
     created_at: now,
     expires_at: previewExpiresAtStorageValue(input.expiresAt),
     deleted_at: null,
+  };
+}
+
+export async function getPreviewRenderOptions(env: PreviewStoreEnv, slug: string): Promise<PreviewRenderOptions> {
+  const settings = await env.PREVIEW_DB.prepare("SELECT * FROM preview_settings WHERE slug = ?")
+    .bind(slug)
+    .first<PreviewSettingsRow>();
+
+  return {
+    allowScripts: settings?.allow_scripts === 1,
   };
 }
 
@@ -198,7 +208,8 @@ export async function softDeletePreview(env: PreviewStoreEnv, slug: string, dele
 
 export async function hardDeletePreview(env: PreviewStoreEnv, slug: string): Promise<void> {
   const preview = await getPreview(env, slug);
-  await env.HTML_PREVIEWS.delete(preview.object_key);
+  await deletePreviewObjects(env, { slug: preview.slug, objectKey: preview.object_key });
+  await deletePreviewAssetRows(env, slug);
   await env.PREVIEW_DB.prepare("DELETE FROM previews WHERE slug = ?").bind(slug).run();
 }
 
@@ -210,6 +221,58 @@ export async function readPreviewHtml(env: PreviewStoreEnv, slug: string): Promi
   }
 
   return object.text();
+}
+
+async function insertPreviewRows(
+  env: PreviewStoreEnv,
+  input: CreatePreviewInput,
+  values: {
+    assets: PreviewAssetUpload[];
+    createdAt: string;
+    objectKey: string;
+    password: PasswordHash;
+    slug: string;
+  },
+): Promise<void> {
+  const statements = [
+    env.PREVIEW_DB.prepare(
+      `INSERT INTO previews (
+        slug,
+        title,
+        object_key,
+        password_hash,
+        password_salt,
+        password_iterations,
+        password_version,
+        publisher_email,
+        source_url,
+        created_at,
+        expires_at,
+        deleted_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, NULL)`,
+    ).bind(
+      values.slug,
+      input.title,
+      values.objectKey,
+      values.password.hash,
+      values.password.salt,
+      values.password.iterations,
+      input.publisherEmail,
+      input.sourceUrl,
+      values.createdAt,
+      previewExpiresAtStorageValue(input.expiresAt),
+    ),
+    env.PREVIEW_DB.prepare(
+      `INSERT INTO preview_settings (
+        slug,
+        allow_scripts,
+        created_at
+      ) VALUES (?, ?, ?)`,
+    ).bind(values.slug, input.allowScripts ? 1 : 0, values.createdAt),
+    ...previewAssetInsertStatements(env, values.assets, values.createdAt),
+  ];
+
+  await env.PREVIEW_DB.batch(statements);
 }
 
 function ensurePreviewIsNotDeleted(preview: PreviewRow): void {

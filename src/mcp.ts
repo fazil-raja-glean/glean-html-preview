@@ -1,11 +1,9 @@
 import { HttpError, jsonResponse } from "./http";
 import { type McpOAuthAccessContext, type McpOAuthEnv, requireMcpOAuthAccessToken } from "./oauth";
-import { parsePreviewPublishInput, type PreviewPublishInput } from "./publish-command";
 
 interface McpEnv extends McpOAuthEnv {
   PUBLISH_API?: Fetcher;
   API_BASE_URL?: string;
-  MAX_HTML_BYTES?: string;
   PUBLISH_API_TOKEN?: string;
   PUBLISH_INTERNAL_SERVICE_TOKEN?: string;
 }
@@ -28,7 +26,7 @@ interface ToolResult {
   isError?: boolean;
 }
 
-type PublishToolArguments = PreviewPublishInput;
+type PublishToolArguments = Record<string, unknown>;
 
 const JSON_RPC_VERSION = "2.0";
 const MCP_PROTOCOL_VERSION = "2025-03-26";
@@ -157,7 +155,36 @@ function publishHtmlPreviewTool(): Record<string, unknown> {
         },
         html: {
           type: "string",
-          description: "Complete HTML document, including an html element.",
+          description:
+            "Complete HTML document, including an html element. Use cid:image-name.png references for images supplied through images[].",
+        },
+        images: {
+          type: "array",
+          description: "Optional image attachments referenced from the HTML as cid:name.",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              name: {
+                type: "string",
+                description: "Unique cid name, for example proof.png.",
+              },
+              mimeType: {
+                type: "string",
+                enum: ["image/png", "image/jpeg", "image/webp", "image/gif", "image/avif"],
+              },
+              dataBase64: {
+                type: "string",
+                description: "Base64 image bytes. Data URLs are accepted.",
+              },
+            },
+            required: ["name", "mimeType", "dataBase64"],
+          },
+        },
+        allowScripts: {
+          type: "boolean",
+          description:
+            "Opt in to local JavaScript execution. Scripts run in a sandbox without allow-same-origin, network access, forms, frames, or workers.",
         },
         password: {
           type: "string",
@@ -192,7 +219,7 @@ async function handleToolsCall(
     return jsonRpcError(id, -32602, `Unknown tool: ${call.name}`);
   }
 
-  const args = parsePublishToolArguments(call.arguments, env);
+  const args = parsePublishToolArguments(call.arguments);
   return jsonRpcResult(id, await publishHtmlPreview(args, env, accessContext));
 }
 
@@ -207,12 +234,12 @@ function parseToolCall(params: unknown): { name: string; arguments: unknown } {
   };
 }
 
-function parsePublishToolArguments(value: unknown, env: McpEnv): PublishToolArguments {
+function parsePublishToolArguments(value: unknown): PublishToolArguments {
   if (!isRecord(value)) {
     throw new HttpError(400, "invalid_tool_arguments", "Tool arguments must be an object");
   }
 
-  return parsePreviewPublishInput(value, env);
+  return value;
 }
 
 async function publishHtmlPreview(

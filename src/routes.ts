@@ -88,6 +88,12 @@ export type Route =
       surface: "preview";
     }
   | {
+      assetId: string;
+      kind: "previewAsset";
+      slug: string;
+      surface: "preview";
+    }
+  | {
       kind: "preview";
       slug: string;
       surface: "preview";
@@ -143,6 +149,16 @@ export function routeForPath(pathname: string): Route {
     return {
       kind: "access",
       slug: accessMatch[1],
+      surface: "preview",
+    };
+  }
+
+  const previewAssetMatch = pathname.match(/^\/p\/([A-Za-z0-9_-]+)\/assets\/([A-Za-z0-9_-]+)$/);
+  if (previewAssetMatch) {
+    return {
+      kind: "previewAsset",
+      slug: previewAssetMatch[1],
+      assetId: previewAssetMatch[2],
       surface: "preview",
     };
   }

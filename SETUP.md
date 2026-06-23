@@ -41,7 +41,7 @@ Do not collapse these roles for production. `WORKER_ROLE=combined` exists for lo
 - Do not put preview routes on the API or MCP Workers.
 - Do not give the MCP Worker direct R2 access.
 - Do not expose secrets or storage bindings to browser JavaScript.
-- Keep `HTML_SECURITY_HEADERS` restrictive.
+- Keep `previewHtmlSecurityHeaders()` restrictive.
 - Serve admin HTML downloads as `text/plain`; do not render uploaded HTML in admin UI.
 - Keep Glean OAuth scopes identity-only by default, usually `openid email`.
 - Keep `wrangler.toml` free of real Cloudflare IDs, real hostnames, real emails, and secrets.
@@ -422,6 +422,17 @@ copyable `link:`/`password:` block (passwords are hashed, so this is only availa
 Editing the UI means editing `src/ui/admin.{html,css,js}` and re-running `npm run build:admin`
 (`check`, `test`, `dev`, and `deploy` run it automatically via pre-hooks).
 
+HTML can reference attached images with `cid:name` URLs. API and MCP callers pass those images in an `images`
+array with `name`, `mimeType`, and `dataBase64`; the API Worker stores them under the same R2 preview prefix
+and rewrites the HTML to `/p/{slug}/assets/{assetId}`. Asset routes require the same viewer password cookie as
+the HTML page, so image bytes remain private R2 objects rather than public bucket URLs. The default limits are
+`MAX_HTML_BYTES=10000000`, `MAX_IMAGES_PER_PREVIEW=25`, `MAX_IMAGE_BYTES=5000000`, and
+`MAX_TOTAL_IMAGE_BYTES=25000000`.
+
+Scripts are blocked by default. Set `allowScripts: true` only when a preview needs local interactivity. Interactive
+previews use `sandbox allow-scripts` without `allow-same-origin`, and still keep `connect-src 'none'`,
+`form-action 'none'`, `frame-src 'none'`, `worker-src 'none'`, and `navigate-to 'none'`.
+
 Publish locally through the API route:
 
 ```sh
@@ -432,6 +443,42 @@ curl -i http://localhost:8787/v1/html-previews \
   --data '{
     "title": "Local smoke test",
     "html": "<!doctype html><html><body><h1>Hello</h1></body></html>",
+    "password": "correct horse battery"
+  }'
+```
+
+Publish with an attached image:
+
+```sh
+curl -i http://localhost:8787/v1/html-previews \
+  -H "Authorization: Bearer $LOCAL_PUBLISH_API_TOKEN" \
+  -H "X-Publish-Admin-Secret: $LOCAL_ADMIN_BYPASS_SECRET" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "title": "Local image smoke test",
+    "html": "<!doctype html><html><body><img alt=\"proof\" src=\"cid:proof.png\"></body></html>",
+    "images": [
+      {
+        "name": "proof.png",
+        "mimeType": "image/png",
+        "dataBase64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+      }
+    ],
+    "password": "correct horse battery"
+  }'
+```
+
+Publish an interactive preview:
+
+```sh
+curl -i http://localhost:8787/v1/html-previews \
+  -H "Authorization: Bearer $LOCAL_PUBLISH_API_TOKEN" \
+  -H "X-Publish-Admin-Secret: $LOCAL_ADMIN_BYPASS_SECRET" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "title": "Local interactive smoke test",
+    "html": "<!doctype html><html><body><button id=\"b\">0</button><script>b.onclick=()=>b.textContent=String(Number(b.textContent)+1)</script></body></html>",
+    "allowScripts": true,
     "password": "correct horse battery"
   }'
 ```

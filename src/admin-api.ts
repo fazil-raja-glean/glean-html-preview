@@ -31,6 +31,9 @@ export interface AdminRouteEnv extends GleanOAuthEnv, PreviewStoreEnv {
   COOKIE_SIGNING_SECRET: string;
   PUBLIC_BASE_URL?: string;
   MAX_HTML_BYTES?: string;
+  MAX_IMAGE_BYTES?: string;
+  MAX_IMAGES_PER_PREVIEW?: string;
+  MAX_TOTAL_IMAGE_BYTES?: string;
 }
 
 interface AdminActionBody {

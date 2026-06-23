@@ -11,6 +11,9 @@ import {
 } from "./mcp-test-helpers";
 import { testOrigins } from "./test-fixtures";
 
+const tinyPngBase64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+
 describe("MCP endpoint", () => {
   it("requires an OAuth bearer token", async () => {
     const missing = await postMcp({ jsonrpc: "2.0", id: 1, method: "initialize" }, {});
@@ -68,6 +71,9 @@ describe("MCP endpoint", () => {
             inputSchema: {
               required: ["title", "html", "password"],
               properties: {
+                allowScripts: {
+                  type: "boolean",
+                },
                 password: {
                   minLength: 5,
                 },
@@ -118,6 +124,14 @@ describe("MCP endpoint", () => {
         arguments: {
           title: "Smoke Test",
           html: "<!doctype html><html><body><h1>Hello</h1></body></html>",
+          images: [
+            {
+              name: "proof.png",
+              mimeType: "image/png",
+              dataBase64: tinyPngBase64,
+            },
+          ],
+          allowScripts: true,
           password: "correct horse battery",
           sourceUrl: "https://source.example.test/artifacts/test",
         },
@@ -164,9 +178,16 @@ describe("MCP endpoint", () => {
     expect(capturedBody).toMatchObject({
       title: "Smoke Test",
       html: "<!doctype html><html><body><h1>Hello</h1></body></html>",
+      images: [
+        {
+          name: "proof.png",
+          mimeType: "image/png",
+          dataBase64: tinyPngBase64,
+        },
+      ],
+      allowScripts: true,
       password: "correct horse battery",
       sourceUrl: "https://source.example.test/artifacts/test",
-      expiresAt: null,
     });
   });
 

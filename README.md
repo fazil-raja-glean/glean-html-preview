@@ -27,6 +27,13 @@ Before connecting clients, deploy the MCP Worker and make sure `${MCP_BASE_URL}/
 
 The default MCP scope is `mcp:tools`.
 
+`publish_html_preview` accepts optional image attachments. Reference them from the HTML as `cid:name`, then send
+matching `images[]` entries with `name`, `mimeType`, and `dataBase64`. The API Worker stores those bytes in private
+R2 objects and rewrites the HTML to password-gated preview asset URLs.
+
+Scripts are blocked by default. Set `allowScripts: true` only for interactive previews that need local JavaScript;
+the Worker still serves them without `allow-same-origin`, network access, forms, frames, or workers.
+
 ### Glean
 
 Create a purpose-built Glean MCP server for this tool instead of adding it to a broad default server.

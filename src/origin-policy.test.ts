@@ -46,6 +46,12 @@ describe("route origin policy", () => {
       surface: "api",
     });
     expect(routeForPath("/p/abc123/access")).toEqual({ kind: "access", slug: "abc123", surface: "preview" });
+    expect(routeForPath("/p/abc123/assets/imageAsset")).toEqual({
+      kind: "previewAsset",
+      slug: "abc123",
+      assetId: "imageAsset",
+      surface: "preview",
+    });
     expect(routeForPath("/p/abc123")).toEqual({ kind: "preview", slug: "abc123", surface: "preview" });
     expect(routeForPath("/nope")).toEqual({ kind: "unknown", surface: "unknown" });
   });

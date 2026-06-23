@@ -4,6 +4,7 @@ import { signText, signToken, verifyToken } from "./signed-token";
 const PASSWORD_ALGORITHM = "PBKDF2-SHA256";
 const PASSWORD_ITERATIONS = 100_000;
 const ACCESS_COOKIE_PURPOSE = "viewer-access:v1";
+const PREVIEW_ASSET_PURPOSE = "preview-asset:v1";
 const HASHED_VIEWER_IP_PURPOSE = "viewer-ip:v1";
 
 export interface PasswordHash {
@@ -17,6 +18,13 @@ export interface AccessCookiePayload {
   slug: string;
   passwordVersion: number;
   expiresAt: number;
+}
+
+export interface PreviewAssetTokenPayload {
+  assetId: string;
+  expiresAt: number;
+  passwordVersion: number;
+  slug: string;
 }
 
 export function createSlug(): string {
@@ -89,6 +97,31 @@ export async function verifyAccessCookie(
   );
 }
 
+export async function signPreviewAssetToken(payload: PreviewAssetTokenPayload, secret: string): Promise<string> {
+  return signToken(payload, secret, PREVIEW_ASSET_PURPOSE);
+}
+
+export async function verifyPreviewAssetToken(
+  token: string,
+  secret: string,
+  expectedSlug: string,
+  expectedAssetId: string,
+  expectedPasswordVersion: number,
+  now = Date.now(),
+): Promise<boolean> {
+  const payload = await verifyToken(token, secret, PREVIEW_ASSET_PURPOSE, parsePreviewAssetTokenPayload);
+  if (!payload) {
+    return false;
+  }
+
+  return (
+    payload.slug === expectedSlug &&
+    payload.assetId === expectedAssetId &&
+    payload.passwordVersion === expectedPasswordVersion &&
+    payload.expiresAt > now
+  );
+}
+
 export async function hashViewerIp(ipAddress: string | null, secret: string): Promise<string | null> {
   if (!ipAddress) {
     return null;
@@ -98,12 +131,36 @@ export async function hashViewerIp(ipAddress: string | null, secret: string): Pr
   return signature.slice(0, 24);
 }
 
+function parsePreviewAssetTokenPayload(value: unknown): PreviewAssetTokenPayload | null {
+  if (!isPreviewAssetTokenPayload(value)) {
+    return null;
+  }
+
+  return value;
+}
+
 function parseAccessCookiePayload(value: unknown): AccessCookiePayload | null {
   if (!isAccessCookiePayload(value)) {
     return null;
   }
 
   return value;
+}
+
+function isPreviewAssetTokenPayload(value: unknown): value is PreviewAssetTokenPayload {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.slug === "string" &&
+    typeof record.assetId === "string" &&
+    typeof record.passwordVersion === "number" &&
+    Number.isInteger(record.passwordVersion) &&
+    typeof record.expiresAt === "number" &&
+    Number.isFinite(record.expiresAt)
+  );
 }
 
 function isAccessCookiePayload(value: unknown): value is AccessCookiePayload {

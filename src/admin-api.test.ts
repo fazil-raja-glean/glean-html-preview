@@ -7,6 +7,8 @@ import type { PreviewRow } from "./preview-store";
 
 const adminEmail = "admin@example.com";
 const sessionSecret = "test-admin-session-secret";
+const tinyPngBase64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
 describe("admin UI and API", () => {
   it("redirects logged-out admins to login and supports local Glean identity bypass", async () => {
@@ -168,6 +170,128 @@ describe("admin UI and API", () => {
     const listBody = (await list.json()) as { previews: Array<{ expiresAt: string | null; slug: string; title: string }> };
     expect(listBody.previews.some((preview) => preview.slug === createdBody.slug)).toBe(true);
     expect(listBody.previews.find((preview) => preview.slug === createdBody.slug)?.expiresAt).toBeNull();
+  });
+
+  it("stores image attachments in R2 and serves them through the preview password gate", async () => {
+    const env = createAdminEnv([]);
+    const { cookie, csrf } = await adminSession(env);
+
+    const created = await worker.fetch(
+      new Request("http://localhost:8787/api/previews", {
+        method: "POST",
+        headers: { Cookie: cookie, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          csrf,
+          title: "Image Page",
+          password: "correct horse",
+          html: '<!doctype html><html><body><img alt="proof" src="cid:proof.png"></body></html>',
+          images: [
+            {
+              name: "proof.png",
+              mimeType: "image/png",
+              dataBase64: tinyPngBase64,
+            },
+          ],
+        }),
+      }),
+      env as never,
+    );
+    expect(created.status).toBe(201);
+    const createdBody = (await created.json()) as { slug: string };
+
+    const unlocked = await worker.fetch(
+      new Request(`http://localhost:8787/p/${createdBody.slug}/access`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ password: "correct horse" }),
+      }),
+      env as never,
+    );
+    const viewerCookie = unlocked.headers.get("Set-Cookie");
+    expect(unlocked.status).toBe(303);
+    expect(viewerCookie).toContain("html_preview_access=");
+
+    const preview = await worker.fetch(
+      new Request(`http://localhost:8787/p/${createdBody.slug}`, {
+        headers: { Cookie: viewerCookie ?? "" },
+      }),
+      env as never,
+    );
+    const html = await preview.text();
+    const assetUrl = html.match(/\/p\/[A-Za-z0-9_-]+\/assets\/[A-Za-z0-9_-]+\?token=[^"]+/)?.[0];
+    const assetPath = assetUrl?.split("?")[0];
+    expect(preview.status).toBe(200);
+    expect(preview.headers.get("Content-Security-Policy")).toContain("img-src https://preview.example.test data: blob:");
+    expect(assetUrl).toContain("?token=");
+    expect(assetPath).toBeTruthy();
+    expect(html).not.toContain("cid:proof.png");
+
+    const lockedAsset = await worker.fetch(new Request(`http://localhost:8787${assetPath}`), env as never);
+    expect(lockedAsset.status).toBe(404);
+
+    const signedAsset = await worker.fetch(new Request(`http://localhost:8787${assetUrl}`), env as never);
+    expect(signedAsset.status).toBe(200);
+    expect(signedAsset.headers.get("Content-Type")).toBe("image/png");
+
+    const cookieAsset = await worker.fetch(
+      new Request(`http://localhost:8787${assetPath}`, {
+        headers: { Cookie: viewerCookie ?? "" },
+      }),
+      env as never,
+    );
+    expect(cookieAsset.status).toBe(200);
+    expect(cookieAsset.headers.get("Content-Type")).toBe("image/png");
+    expect(cookieAsset.headers.get("Cross-Origin-Resource-Policy")).toBeNull();
+    const assetBytes = new Uint8Array(await cookieAsset.arrayBuffer());
+    expect([...assetBytes.slice(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+    expect(assetBytes.length).toBeGreaterThan(8);
+  });
+
+  it("allows scripts only for previews that opt in to interactive mode", async () => {
+    const env = createAdminEnv([]);
+    const { cookie, csrf } = await adminSession(env);
+
+    const created = await worker.fetch(
+      new Request("http://localhost:8787/api/previews", {
+        method: "POST",
+        headers: { Cookie: cookie, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          csrf,
+          title: "Interactive Page",
+          password: "correct horse",
+          allowScripts: true,
+          html: "<!doctype html><html><body><script>document.body.dataset.ready='yes'</script></body></html>",
+        }),
+      }),
+      env as never,
+    );
+    expect(created.status).toBe(201);
+    const createdBody = (await created.json()) as { slug: string };
+
+    const unlocked = await worker.fetch(
+      new Request(`http://localhost:8787/p/${createdBody.slug}/access`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ password: "correct horse" }),
+      }),
+      env as never,
+    );
+    const viewerCookie = unlocked.headers.get("Set-Cookie");
+    expect(unlocked.status).toBe(303);
+
+    const preview = await worker.fetch(
+      new Request(`http://localhost:8787/p/${createdBody.slug}`, {
+        headers: { Cookie: viewerCookie ?? "" },
+      }),
+      env as never,
+    );
+    const csp = preview.headers.get("Content-Security-Policy") ?? "";
+    expect(preview.status).toBe(200);
+    expect(csp).toContain("sandbox allow-scripts");
+    expect(csp).not.toContain("allow-same-origin");
+    expect(csp).toContain("script-src 'unsafe-inline'");
+    expect(csp).toContain("connect-src 'none'");
+    expect(csp).toContain("navigate-to 'none'");
   });
 
   it("keeps blank-expiry previews active and expires explicit past timestamps", async () => {

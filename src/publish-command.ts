@@ -1,9 +1,12 @@
 import { HttpError } from "./http";
+import { parsePreviewImages, type PreviewAssetLimitsEnv, type PreviewImageInput } from "./preview-assets";
 import type { PublishPrincipal } from "./publish-principal";
 
 export interface PublishCommand {
+  allowScripts: boolean;
   expiresAt: string | null;
   html: string;
+  images: PreviewImageInput[];
   password: string;
   publisherEmail: string;
   sourceUrl: string | null;
@@ -11,8 +14,10 @@ export interface PublishCommand {
 }
 
 export interface PreviewPublishInput {
+  allowScripts: boolean;
   expiresAt: string | null;
   html: string;
+  images: PreviewImageInput[];
   password: string;
   sourceUrl: string | null;
   title: string;
@@ -26,11 +31,11 @@ export interface UnpublishCommand {
   deleteObject: boolean;
 }
 
-interface PublishCommandEnv {
+interface PublishCommandEnv extends PreviewAssetLimitsEnv {
   MAX_HTML_BYTES?: string;
 }
 
-const DEFAULT_MAX_HTML_BYTES = 2_000_000;
+const DEFAULT_MAX_HTML_BYTES = 10_000_000;
 const MIN_PASSWORD_LENGTH = 5;
 const MAX_PASSWORD_LENGTH = 256;
 
@@ -51,6 +56,8 @@ export function parsePreviewPublishInput(body: Record<string, unknown>, env: Pub
   const password = requireString(body.password, "password");
   const expiresAt = parseExpiresAt(body.expiresAt);
   const sourceUrl = parseOptionalUrl(body.sourceUrl, "sourceUrl");
+  const images = parsePreviewImages(body.images, env);
+  const allowScripts = parseOptionalBoolean(body.allowScripts, "allowScripts");
   const maxHtmlBytes = parsePositiveInteger(env.MAX_HTML_BYTES, DEFAULT_MAX_HTML_BYTES);
 
   if (title.length < 1 || title.length > 160) {
@@ -70,6 +77,8 @@ export function parsePreviewPublishInput(body: Record<string, unknown>, env: Pub
   return {
     title,
     html,
+    images,
+    allowScripts,
     password,
     expiresAt,
     sourceUrl,
@@ -89,6 +98,18 @@ export function parseRotatePasswordCommand(body: Record<string, unknown>): Rotat
   return {
     password,
   };
+}
+
+function parseOptionalBoolean(value: unknown, field: string): boolean {
+  if (value === undefined || value === null) {
+    return false;
+  }
+
+  if (typeof value !== "boolean") {
+    throw new HttpError(400, "invalid_request", `${field} must be a boolean`);
+  }
+
+  return value;
 }
 
 function requireString(value: unknown, field: string): string {

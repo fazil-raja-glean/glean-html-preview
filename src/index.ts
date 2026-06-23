@@ -1,4 +1,3 @@
-import { randomBase64Url } from "./encoding";
 import { enforceEdgeRateLimit } from "./edge-rate-limit";
 import { HttpError, errorResponse, jsonResponse, methodNotAllowed, readJsonObject } from "./http";
 import { handleMcpRequest } from "./mcp";
@@ -13,20 +12,21 @@ import {
 import { requirePublishPrincipal, type PublishPrincipal } from "./publish-principal";
 import { handleAdminRoute, type AdminRouteEnv } from "./admin-api";
 import { recordAudit } from "./audit";
-import { getCookie } from "./cookies";
+import { ACCESS_COOKIE_NAME, ACCESS_COOKIE_TTL_SECONDS, hasPreviewAccess } from "./preview-access";
+import { deletePreviewObjects } from "./preview-asset-store";
+import { passwordForm } from "./preview-password-form";
+import { handlePreviewAssetRequest, handlePreviewRequest } from "./preview-renderer";
 import {
   createPreview,
   getActivePreview,
   getPreview,
   rotatePreviewPassword,
   softDeletePreview,
-  type PreviewRow,
 } from "./preview-store";
 import { routeForPath } from "./routes";
 import {
   hashViewerIp,
   signAccessCookie,
-  verifyAccessCookie,
   verifyPassword,
 } from "./security";
 
@@ -62,6 +62,9 @@ interface Env extends McpOAuthEnv, AdminRouteEnv {
   PUBLISHER_EMAIL_DOMAIN?: string;
   TRUSTED_PUBLISHER_EMAIL?: string;
   MAX_HTML_BYTES?: string;
+  MAX_IMAGE_BYTES?: string;
+  MAX_IMAGES_PER_PREVIEW?: string;
+  MAX_TOTAL_IMAGE_BYTES?: string;
   ACCESS_RATE_LIMIT_WINDOW_SECONDS?: string;
   ACCESS_RATE_LIMIT_LOCK_SECONDS?: string;
   MAX_ACCESS_FAILURES_PER_IP?: string;
@@ -91,22 +94,10 @@ interface AccessRateLimitBlock {
   retryAfterSeconds: number;
 }
 
-const ACCESS_COOKIE_NAME = "html_preview_access";
-const ACCESS_COOKIE_TTL_SECONDS = 60 * 60 * 12;
 const DEFAULT_ACCESS_RATE_LIMIT_WINDOW_SECONDS = 10 * 60;
 const DEFAULT_ACCESS_RATE_LIMIT_LOCK_SECONDS = 15 * 60;
 const DEFAULT_MAX_ACCESS_FAILURES_PER_IP = 8;
 const DEFAULT_MAX_ACCESS_FAILURES_PER_PREVIEW = 100;
-export const HTML_SECURITY_HEADERS = {
-  "Content-Security-Policy":
-    "sandbox; default-src 'none'; script-src 'none'; script-src-attr 'none'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; frame-ancestors 'none'",
-  "X-Content-Type-Options": "nosniff",
-  "Referrer-Policy": "no-referrer",
-  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-  "Cross-Origin-Opener-Policy": "same-origin",
-  "Cross-Origin-Resource-Policy": "same-origin",
-  "X-Frame-Options": "DENY",
-};
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -206,6 +197,12 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
       }
 
       return handlePreviewRequest(request, env, route.slug);
+    case "previewAsset":
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        return methodNotAllowed();
+      }
+
+      return handlePreviewAssetRequest(request, env, route.slug, route.assetId);
     case "unknown":
       break;
   }
@@ -260,7 +257,7 @@ async function unpublishPreview(
   const deletedAt = await softDeletePreview(env, slug);
 
   if (input.deleteObject) {
-    await env.HTML_PREVIEWS.delete(existing.object_key);
+    await deletePreviewObjects(env, { slug: existing.slug, objectKey: existing.object_key });
   }
 
   await recordAudit(env, {
@@ -292,29 +289,6 @@ async function rotatePassword(
   });
 
   return jsonResponse({ slug, status: "active" });
-}
-
-async function handlePreviewRequest(request: Request, env: Env, slug: string): Promise<Response> {
-  const preview = await getActivePreview(env, slug);
-  const cookie = getCookie(request, ACCESS_COOKIE_NAME);
-  const hasAccess =
-    cookie !== null &&
-    (await verifyAccessCookie(cookie, env.COOKIE_SIGNING_SECRET, preview.slug, preview.password_version));
-
-  if (!hasAccess) {
-    return passwordForm(preview, null, 200);
-  }
-
-  const object = await env.HTML_PREVIEWS.get(preview.object_key);
-  if (!object?.body) {
-    throw new HttpError(404, "preview_object_missing", "Preview content is missing");
-  }
-
-  const headers = new Headers(HTML_SECURITY_HEADERS);
-  headers.set("Content-Type", "text/html; charset=utf-8");
-  headers.set("Cache-Control", "private, no-store");
-
-  return new Response(object.body, { headers });
 }
 
 async function handleAccessRequest(request: Request, env: Env, slug: string): Promise<Response> {
@@ -565,103 +539,4 @@ function parseTimestamp(value: string | null | undefined): number | null {
 
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? timestamp : null;
-}
-
-function passwordForm(
-  preview: PreviewRow,
-  error: string | null,
-  status: number,
-  extraHeaders: Record<string, string> = {},
-): Response {
-  const nonce = randomBase64Url(12);
-  const errorMarkup = error ? `<p class="error">${escapeHtml(error)}</p>` : "";
-  const html = `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>${escapeHtml(preview.title)}</title>
-    <style nonce="${nonce}">
-      :root { color-scheme: light dark; }
-      body {
-        align-items: center;
-        background: #f7f7f6;
-        color: #1b1b1b;
-        display: flex;
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        justify-content: center;
-        min-height: 100vh;
-        margin: 0;
-        padding: 24px;
-      }
-      main {
-        background: #fff;
-        border: 1px solid #e5e5e2;
-        border-radius: 8px;
-        box-shadow: 0 12px 34px rgba(0, 0, 0, 0.08);
-        max-width: 420px;
-        padding: 24px;
-        width: 100%;
-      }
-      h1 { font-size: 20px; line-height: 1.2; margin: 0 0 8px; }
-      p { color: #686867; font-size: 14px; margin: 0 0 18px; }
-      label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
-      input {
-        border: 1px solid #cfcfcc;
-        border-radius: 6px;
-        box-sizing: border-box;
-        font: inherit;
-        margin-bottom: 14px;
-        padding: 10px 12px;
-        width: 100%;
-      }
-      button {
-        background: #1b1b1b;
-        border: 0;
-        border-radius: 6px;
-        color: #fff;
-        cursor: pointer;
-        font: inherit;
-        font-weight: 650;
-        padding: 10px 14px;
-        width: 100%;
-      }
-      .error { color: #8a1f1f; font-weight: 600; }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>${escapeHtml(preview.title)}</h1>
-      <p>This HTML preview is password protected.</p>
-      ${errorMarkup}
-      <form method="post" action="/p/${preview.slug}/access">
-        <label for="password">Password</label>
-        <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
-        <button type="submit">View preview</button>
-      </form>
-    </main>
-  </body>
-</html>`;
-
-  const headers = new Headers({
-    "Content-Type": "text/html; charset=utf-8",
-    "Cache-Control": "no-store",
-    "Content-Security-Policy": `default-src 'none'; style-src 'nonce-${nonce}'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`,
-    "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
-  });
-  for (const [name, value] of Object.entries(extraHeaders)) {
-    headers.set(name, value);
-  }
-
-  return new Response(html, { status, headers });
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
 }
