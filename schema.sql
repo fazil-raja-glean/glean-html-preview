@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS previews (
   publisher_email TEXT NOT NULL,
   source_url TEXT,
   created_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL DEFAULT '',
   deleted_at TEXT
 );
 

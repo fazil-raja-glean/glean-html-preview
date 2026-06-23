@@ -5,6 +5,33 @@ import { parsePreviewPublishInput, parseRotatePasswordCommand } from "./publish-
 const completeHtml = "<!doctype html><html><body><h1>Preview</h1></body></html>";
 
 describe("publish command password validation", () => {
+  it("does not set an expiry when expiresAt is omitted", () => {
+    expect(
+      parsePreviewPublishInput(
+        {
+          title: "No expiry",
+          html: completeHtml,
+          password: "abcde",
+        },
+        {},
+      ).expiresAt,
+    ).toBeNull();
+  });
+
+  it("keeps explicit future expiry timestamps", () => {
+    expect(
+      parsePreviewPublishInput(
+        {
+          title: "Explicit expiry",
+          html: completeHtml,
+          password: "abcde",
+          expiresAt: "2099-01-01T00:00:00.000Z",
+        },
+        {},
+      ).expiresAt,
+    ).toBe("2099-01-01T00:00:00.000Z");
+  });
+
   it("accepts 5-character viewer passwords", () => {
     expect(
       parsePreviewPublishInput(

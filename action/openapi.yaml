@@ -39,7 +39,8 @@ paths:
                 expiresAt:
                   type: string
                   format: date-time
-                  description: Optional expiry timestamp. Defaults to the service retention window.
+                  nullable: true
+                  description: Optional expiry timestamp. Omit it or pass null for a preview that does not expire.
                 sourceUrl:
                   type: string
                   format: uri
@@ -64,6 +65,7 @@ paths:
                     type: string
                   expiresAt:
                     type: string
+                    nullable: true
                   status:
                     type: string
         "401":

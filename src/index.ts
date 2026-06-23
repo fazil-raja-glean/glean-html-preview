@@ -61,7 +61,6 @@ interface Env extends McpOAuthEnv, AdminRouteEnv {
   WORKER_ROLE?: string;
   PUBLISHER_EMAIL_DOMAIN?: string;
   TRUSTED_PUBLISHER_EMAIL?: string;
-  DEFAULT_EXPIRES_DAYS?: string;
   MAX_HTML_BYTES?: string;
   ACCESS_RATE_LIMIT_WINDOW_SECONDS?: string;
   ACCESS_RATE_LIMIT_LOCK_SECONDS?: string;

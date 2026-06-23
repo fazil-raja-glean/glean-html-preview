@@ -152,16 +152,39 @@ describe("admin UI and API", () => {
       env as never,
     );
     expect(created.status).toBe(201);
-    const createdBody = (await created.json()) as { slug: string; url: string };
+    const createdBody = (await created.json()) as { expiresAt: string | null; slug: string; url: string };
     expect(createdBody.slug).toBeTruthy();
     expect(createdBody.url).toContain("/p/" + createdBody.slug);
+    expect(createdBody.expiresAt).toBeNull();
+
+    const preview = await worker.fetch(new Request(`http://localhost:8787/p/${createdBody.slug}`), env as never);
+    expect(preview.status).toBe(200);
+    expect(await preview.text()).toContain("password protected");
 
     const list = await worker.fetch(
       new Request("http://localhost:8787/api/previews", { headers: { Cookie: cookie } }),
       env as never,
     );
-    const listBody = (await list.json()) as { previews: Array<{ slug: string; title: string }> };
+    const listBody = (await list.json()) as { previews: Array<{ expiresAt: string | null; slug: string; title: string }> };
     expect(listBody.previews.some((preview) => preview.slug === createdBody.slug)).toBe(true);
+    expect(listBody.previews.find((preview) => preview.slug === createdBody.slug)?.expiresAt).toBeNull();
+  });
+
+  it("keeps blank-expiry previews active and expires explicit past timestamps", async () => {
+    const permanentEnv = createAdminEnv([previewRow({ expires_at: "" })]);
+    const expiredEnv = createAdminEnv([previewRow({ expires_at: "2000-01-01T00:00:00.000Z" })]);
+
+    const permanent = await worker.fetch(new Request("http://localhost:8787/p/abc123"), permanentEnv as never);
+    const expired = await worker.fetch(new Request("http://localhost:8787/p/abc123"), expiredEnv as never);
+
+    expect(permanent.status).toBe(200);
+    expect(await permanent.text()).toContain("password protected");
+    expect(expired.status).toBe(410);
+    await expect(expired.json()).resolves.toMatchObject({
+      error: {
+        code: "preview_expired",
+      },
+    });
   });
 
   it("rejects admin publishing without CSRF, session, or valid input", async () => {

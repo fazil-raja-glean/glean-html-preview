@@ -30,7 +30,6 @@ import { adminPreviewFromRow } from "./admin-preview";
 export interface AdminRouteEnv extends GleanOAuthEnv, PreviewStoreEnv {
   COOKIE_SIGNING_SECRET: string;
   PUBLIC_BASE_URL?: string;
-  DEFAULT_EXPIRES_DAYS?: string;
   MAX_HTML_BYTES?: string;
 }
 

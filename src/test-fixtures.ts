@@ -100,7 +100,7 @@ export function createTestPreviewDb(seedPreviews: PreviewRow[] = []): D1Database
               publisher_email: String(publisherEmail),
               source_url: typeof sourceUrl === "string" ? sourceUrl : null,
               created_at: String(createdAt),
-              expires_at: String(expiresAt),
+              expires_at: typeof expiresAt === "string" ? expiresAt : "",
               deleted_at: null,
             });
             return d1Result<T>(1);

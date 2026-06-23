@@ -5,7 +5,6 @@ import { parsePreviewPublishInput, type PreviewPublishInput } from "./publish-co
 interface McpEnv extends McpOAuthEnv {
   PUBLISH_API?: Fetcher;
   API_BASE_URL?: string;
-  DEFAULT_EXPIRES_DAYS?: string;
   MAX_HTML_BYTES?: string;
   PUBLISH_API_TOKEN?: string;
   PUBLISH_INTERNAL_SERVICE_TOKEN?: string;

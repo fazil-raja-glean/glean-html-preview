@@ -80,6 +80,7 @@
   }
 
   function formatDate(value) {
+    if (!value) return "Never";
     const ts = Date.parse(value);
     if (!Number.isFinite(ts)) return value;
     return new Date(ts).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
@@ -87,7 +88,7 @@
 
   function statusOf(preview) {
     if (preview.deletedAt) return "unpublished";
-    if (Date.parse(preview.expiresAt) <= Date.now()) return "expired";
+    if (preview.expiresAt && Date.parse(preview.expiresAt) <= Date.now()) return "expired";
     return "active";
   }
 

@@ -2,7 +2,7 @@ import { HttpError } from "./http";
 import type { PublishPrincipal } from "./publish-principal";
 
 export interface PublishCommand {
-  expiresAt: string;
+  expiresAt: string | null;
   html: string;
   password: string;
   publisherEmail: string;
@@ -11,7 +11,7 @@ export interface PublishCommand {
 }
 
 export interface PreviewPublishInput {
-  expiresAt: string;
+  expiresAt: string | null;
   html: string;
   password: string;
   sourceUrl: string | null;
@@ -27,11 +27,9 @@ export interface UnpublishCommand {
 }
 
 interface PublishCommandEnv {
-  DEFAULT_EXPIRES_DAYS?: string;
   MAX_HTML_BYTES?: string;
 }
 
-const DEFAULT_EXPIRES_DAYS = 60;
 const DEFAULT_MAX_HTML_BYTES = 2_000_000;
 const MIN_PASSWORD_LENGTH = 5;
 const MAX_PASSWORD_LENGTH = 256;
@@ -51,7 +49,7 @@ export function parsePreviewPublishInput(body: Record<string, unknown>, env: Pub
   const title = requireString(body.title, "title").trim();
   const html = requireString(body.html, "html");
   const password = requireString(body.password, "password");
-  const expiresAt = parseExpiresAt(body.expiresAt, env);
+  const expiresAt = parseExpiresAt(body.expiresAt);
   const sourceUrl = parseOptionalUrl(body.sourceUrl, "sourceUrl");
   const maxHtmlBytes = parsePositiveInteger(env.MAX_HTML_BYTES, DEFAULT_MAX_HTML_BYTES);
 
@@ -126,11 +124,9 @@ function parseOptionalUrl(value: unknown, field: string): string | null {
   }
 }
 
-function parseExpiresAt(value: unknown, env: PublishCommandEnv): string {
+function parseExpiresAt(value: unknown): string | null {
   if (value === undefined || value === null || value === "") {
-    const days = parsePositiveInteger(env.DEFAULT_EXPIRES_DAYS, DEFAULT_EXPIRES_DAYS);
-    const date = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
-    return date.toISOString();
+    return null;
   }
 
   const text = requireString(value, "expiresAt");

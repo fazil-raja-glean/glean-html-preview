@@ -100,7 +100,7 @@ describe("MCP endpoint", () => {
         JSON.stringify({
           url: `${testOrigins.previewBaseUrl}/p/abc123`,
           slug: "abc123",
-          expiresAt: "2026-08-18T12:00:00.000Z",
+          expiresAt: null,
           status: "active",
         }),
         {
@@ -146,6 +146,7 @@ describe("MCP endpoint", () => {
         structuredContent: {
           url: `${testOrigins.previewBaseUrl}/p/abc123`,
           slug: "abc123",
+          expiresAt: null,
           status: "active",
         },
       },
@@ -165,8 +166,8 @@ describe("MCP endpoint", () => {
       html: "<!doctype html><html><body><h1>Hello</h1></body></html>",
       password: "correct horse battery",
       sourceUrl: "https://source.example.test/artifacts/test",
+      expiresAt: null,
     });
-    expect(Date.parse(String(capturedBody.expiresAt))).toBeGreaterThan(Date.now());
   });
 
   it("rejects publish tool calls when the OAuth token is not bound to a Glean user", async () => {

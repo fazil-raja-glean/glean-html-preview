@@ -23,7 +23,7 @@ export interface PreviewRow {
 }
 
 export interface CreatePreviewInput {
-  expiresAt: string;
+  expiresAt: string | null;
   html: string;
   password: string;
   publisherEmail: string;
@@ -76,7 +76,7 @@ export async function createPreview(env: PreviewStoreEnv, input: CreatePreviewIn
         input.publisherEmail,
         input.sourceUrl,
         now,
-        input.expiresAt,
+        previewExpiresAtStorageValue(input.expiresAt),
       )
       .run();
   } catch (error) {
@@ -95,7 +95,7 @@ export async function createPreview(env: PreviewStoreEnv, input: CreatePreviewIn
     publisher_email: input.publisherEmail,
     source_url: input.sourceUrl,
     created_at: now,
-    expires_at: input.expiresAt,
+    expires_at: previewExpiresAtStorageValue(input.expiresAt),
     deleted_at: null,
   };
 }
@@ -164,7 +164,7 @@ export async function getActivePreview(env: PreviewStoreEnv, slug: string): Prom
     throw new HttpError(410, "preview_unpublished", "Preview has been unpublished");
   }
 
-  if (Date.parse(preview.expires_at) <= Date.now()) {
+  if (isPreviewExpired(preview)) {
     throw new HttpError(410, "preview_expired", "Preview has expired");
   }
 
@@ -216,4 +216,18 @@ function ensurePreviewIsNotDeleted(preview: PreviewRow): void {
   if (preview.deleted_at) {
     throw new HttpError(410, "preview_unpublished", "Preview has been unpublished");
   }
+}
+
+export function normalizePreviewExpiresAt(value: string | null): string | null {
+  const text = value?.trim() ?? "";
+  return text ? text : null;
+}
+
+export function previewExpiresAtStorageValue(value: string | null): string {
+  return normalizePreviewExpiresAt(value) ?? "";
+}
+
+function isPreviewExpired(preview: PreviewRow, now = Date.now()): boolean {
+  const expiresAt = normalizePreviewExpiresAt(preview.expires_at);
+  return expiresAt !== null && Date.parse(expiresAt) <= now;
 }
