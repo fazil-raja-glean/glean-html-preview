@@ -14,6 +14,8 @@ This repo turns AI-generated HTML artifacts into shareable pages without treatin
 
 Keep those surfaces separate. The preview Worker renders hostile HTML. The API and MCP Workers make trusted publish, admin, OAuth, and ownership decisions.
 
+The admin console uses Glean Dynamic Client Registration for its login client. MCP keeps its configured OAuth clients for Glean, Codex, Claude Code, and Cursor.
+
 For deployment, local development, verification, and fork guidance, see [SETUP.md](./SETUP.md). For contribution checks, see [CONTRIBUTING.md](./CONTRIBUTING.md). For failure modes discovered during real work on this repo, see [docs/KNOWN_GOTCHAS.md](./docs/KNOWN_GOTCHAS.md).
 
 ## Connect The MCP

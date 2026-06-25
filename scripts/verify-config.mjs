@@ -108,7 +108,14 @@ function verifyFile(path, options) {
     includesListValue(mcpVars.MCP_OAUTH_ALLOWED_REDIRECT_URIS, "http://localhost:5555/callback"),
     "Claude Code loopback redirect URI must be allow-listed",
   );
-  check(apiVars.GLEAN_OAUTH_SCOPES === "openid email", "API Glean OAuth scopes must stay identity-only");
+  check(apiVars.GLEAN_OAUTH_CLIENT_ID === undefined, "API admin OAuth must use dynamic client registration, not a static client id");
+  check(apiVars.GLEAN_OAUTH_CLIENT_SECRET === undefined, "API admin OAuth must not configure a static client secret");
+  check(
+    hasText(apiVars.GLEAN_OAUTH_DISCOVERY_URL) || hasText(apiVars.GLEAN_OAUTH_ISSUER),
+    "API admin dynamic OAuth must configure GLEAN_OAUTH_DISCOVERY_URL or GLEAN_OAUTH_ISSUER",
+  );
+  check(hasText(mcpVars.GLEAN_OAUTH_CLIENT_ID), "MCP Glean OAuth must keep its configured static client id");
+  check(apiVars.GLEAN_OAUTH_SCOPES === undefined, "API admin OAuth scopes are code-owned and must not be configured");
   check(mcpVars.GLEAN_OAUTH_SCOPES === "openid email", "MCP Glean OAuth scopes must stay identity-only");
 
   if (options.kind === "template") {
@@ -281,6 +288,10 @@ function includesListValue(value, expected) {
     return false;
   }
   return value.split(/[\n,]+/).map((item) => item.trim()).includes(expected);
+}
+
+function hasText(value) {
+  return typeof value === "string" && value.trim() !== "";
 }
 
 function placeholderLocations(doc) {

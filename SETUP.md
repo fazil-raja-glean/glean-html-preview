@@ -135,24 +135,26 @@ These edge limits sit in front of app-level D1 throttling.
 
 ## 5. Configure Glean OAuth
 
-Create a Glean OAuth client and allow-list:
+The admin console uses Glean Dynamic Client Registration. In Glean Admin Console, enable the Glean OAuth Authorization Server and allow dynamic registrations for the exact admin callback URL:
 
 - `${API_BASE_URL}/auth/callback`
-- `${MCP_BASE_URL}/oauth/callback`
 
-Configure both `env.api.vars` and `env.mcp.vars`:
+Configure `env.api.vars` with issuer/discovery metadata, but do not configure a static admin `GLEAN_OAUTH_CLIENT_ID`:
 
 ```toml
-GLEAN_OAUTH_CLIENT_ID = "html-sharing-admin"
 GLEAN_OAUTH_ISSUER = "https://<glean-domain>/oauth"
 GLEAN_OAUTH_AUTHORIZATION_URL = "https://<glean-domain>/oauth/authorize"
+GLEAN_OAUTH_REGISTRATION_URL = "https://<glean-domain>/oauth/register"
 GLEAN_OAUTH_TOKEN_URL = "https://<glean-domain>/oauth/token"
 GLEAN_OAUTH_USERINFO_URL = ""
 GLEAN_OAUTH_JWKS_URL = "https://<glean-domain>/api/oauth/jwks"
-GLEAN_OAUTH_SCOPES = "openid email"
 ```
 
-If Glean provides OAuth discovery metadata, you can set `GLEAN_OAUTH_DISCOVERY_URL` instead of explicit endpoint and JWKS URLs.
+If Glean provides OAuth discovery metadata with the registration endpoint, you can set `GLEAN_OAUTH_DISCOVERY_URL` instead of explicit endpoint and JWKS URLs.
+
+The admin Worker requests only `openid email` for admin login. These admin scopes are code-owned and should not be configured in `env.api.vars`. Glean may return a broader tenant-level scope set in the DCR client metadata; the Worker stores that registration but still sends only `openid email` to the authorization endpoint and only uses the resulting identity information. Access tokens are not stored in the admin session.
+
+MCP user login still uses the configured Glean OAuth client values in `env.mcp.vars`; do not remove `GLEAN_OAUTH_CLIENT_ID` or `GLEAN_OAUTH_CLIENT_SECRET` from the MCP deployment.
 
 Configure authorization:
 
@@ -203,6 +205,7 @@ Generate secrets locally:
 ```sh
 export COOKIE_SIGNING_SECRET="$(openssl rand -base64 48)"
 export ADMIN_SESSION_SECRET="$(openssl rand -base64 48)"
+export ADMIN_DYNAMIC_OAUTH_ENCRYPTION_SECRET="$(openssl rand -base64 48)"
 export PASSWORD_PEPPER="$(openssl rand -base64 48)"
 export PUBLISH_API_TOKEN="$(openssl rand -base64 48)"
 export PUBLISH_INTERNAL_SERVICE_TOKEN="$(openssl rand -base64 48)"
@@ -221,6 +224,8 @@ printf '%s' "$COOKIE_SIGNING_SECRET" | npx wrangler secret put COOKIE_SIGNING_SE
 printf '%s' "$ADMIN_SESSION_SECRET" | npx wrangler secret put ADMIN_SESSION_SECRET --env api
 printf '%s' "$ADMIN_SESSION_SECRET" | npx wrangler secret put ADMIN_SESSION_SECRET --env mcp
 
+printf '%s' "$ADMIN_DYNAMIC_OAUTH_ENCRYPTION_SECRET" | npx wrangler secret put ADMIN_DYNAMIC_OAUTH_ENCRYPTION_SECRET --env api
+
 printf '%s' "$PASSWORD_PEPPER" | npx wrangler secret put PASSWORD_PEPPER --env=""
 printf '%s' "$PASSWORD_PEPPER" | npx wrangler secret put PASSWORD_PEPPER --env api
 
@@ -230,7 +235,6 @@ printf '%s' "$PUBLISH_API_TOKEN" | npx wrangler secret put PUBLISH_API_TOKEN --e
 printf '%s' "$PUBLISH_INTERNAL_SERVICE_TOKEN" | npx wrangler secret put PUBLISH_INTERNAL_SERVICE_TOKEN --env api
 printf '%s' "$PUBLISH_INTERNAL_SERVICE_TOKEN" | npx wrangler secret put PUBLISH_INTERNAL_SERVICE_TOKEN --env mcp
 
-printf '%s' "$GLEAN_OAUTH_CLIENT_SECRET" | npx wrangler secret put GLEAN_OAUTH_CLIENT_SECRET --env api
 printf '%s' "$GLEAN_OAUTH_CLIENT_SECRET" | npx wrangler secret put GLEAN_OAUTH_CLIENT_SECRET --env mcp
 
 printf '%s' "$MCP_OAUTH_CLIENT_SECRET" | npx wrangler secret put MCP_OAUTH_CLIENT_SECRET --env mcp
@@ -366,6 +370,7 @@ LOCAL_PUBLISH_API_TOKEN="$(openssl rand -base64 48)"
 LOCAL_MCP_OAUTH_CLIENT_SECRET="$(openssl rand -base64 48)"
 LOCAL_MCP_OAUTH_TOKEN_SECRET="$(openssl rand -base64 48)"
 LOCAL_ADMIN_BYPASS_SECRET="$(openssl rand -base64 48)"
+LOCAL_ADMIN_DYNAMIC_OAUTH_ENCRYPTION_SECRET="$(openssl rand -base64 48)"
 LOCAL_ADMIN_SESSION_SECRET="$(openssl rand -base64 48)"
 LOCAL_GLEAN_OAUTH_CLIENT_SECRET="$(openssl rand -base64 48)"
 LOCAL_COOKIE_SIGNING_SECRET="$(openssl rand -base64 48)"
@@ -385,6 +390,7 @@ MCP_OAUTH_CLIENT_SECRET=$LOCAL_MCP_OAUTH_CLIENT_SECRET
 MCP_OAUTH_TOKEN_SECRET=$LOCAL_MCP_OAUTH_TOKEN_SECRET
 ADMIN_ALLOWED_EMAIL_DOMAIN=example.com
 ADMIN_LOCAL_BYPASS_EMAIL=html-sharing@example.com
+ADMIN_DYNAMIC_OAUTH_ENCRYPTION_SECRET=$LOCAL_ADMIN_DYNAMIC_OAUTH_ENCRYPTION_SECRET
 ADMIN_SESSION_SECRET=$LOCAL_ADMIN_SESSION_SECRET
 GLEAN_OAUTH_CLIENT_ID=local-html-sharing-admin
 GLEAN_OAUTH_CLIENT_SECRET=$LOCAL_GLEAN_OAUTH_CLIENT_SECRET

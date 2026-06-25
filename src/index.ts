@@ -42,6 +42,7 @@ interface Env extends McpOAuthEnv, AdminRouteEnv {
   PUBLISH_ACCESS_AUD?: string;
   PUBLISH_ADMIN_LOCAL_BYPASS_SECRET?: string;
   ADMIN_ALLOWED_EMAIL_DOMAIN?: string;
+  ADMIN_DYNAMIC_OAUTH_ENCRYPTION_SECRET?: string;
   ADMIN_LOCAL_BYPASS_EMAIL?: string;
   ADMIN_SESSION_SECRET?: string;
   ADMIN_SESSION_TTL_SECONDS?: string;
@@ -51,6 +52,7 @@ interface Env extends McpOAuthEnv, AdminRouteEnv {
   GLEAN_OAUTH_DISCOVERY_URL?: string;
   GLEAN_OAUTH_ISSUER?: string;
   GLEAN_OAUTH_JWKS_URL?: string;
+  GLEAN_OAUTH_REGISTRATION_URL?: string;
   GLEAN_OAUTH_SCOPES?: string;
   GLEAN_OAUTH_TOKEN_URL?: string;
   GLEAN_OAUTH_USERINFO_URL?: string;

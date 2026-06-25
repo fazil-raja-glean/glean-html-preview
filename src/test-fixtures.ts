@@ -45,8 +45,25 @@ interface TestOAuthGrantRow {
   scope: string;
 }
 
+interface TestAdminOAuthClientRow {
+  api_base_url: string;
+  client_id: string;
+  client_secret_ciphertext: string | null;
+  client_secret_iv: string | null;
+  created_at: string;
+  expires_at: string | null;
+  id: string;
+  issuer: string;
+  metadata_json: string;
+  redirect_uri: string;
+  scopes: string;
+  token_endpoint_auth_method: string;
+  updated_at: string;
+}
+
 export function createTestPreviewDb(seedPreviews: PreviewRow[] = [], seedAssets: PreviewAssetRow[] = []): D1Database {
   const oauthGrants = new Map<string, TestOAuthGrantRow>();
+  const adminOAuthClients = new Map<string, TestAdminOAuthClientRow>();
   const previews = new Map(seedPreviews.map((preview) => [preview.slug, { ...preview }]));
   const previewSettings = new Map<string, PreviewSettingsRow>();
   const assets = new Map(seedAssets.map((asset) => [assetKey(asset.slug, asset.asset_id), { ...asset }]));
@@ -143,6 +160,42 @@ export function createTestPreviewDb(seedPreviews: PreviewRow[] = [], seedAssets:
               byte_size: Number(byteSize),
               original_name: String(originalName),
               created_at: String(createdAt),
+            });
+            return d1Result<T>(1);
+          }
+
+          if (normalizedQuery.startsWith("INSERT OR REPLACE INTO ADMIN_OAUTH_CLIENTS")) {
+            const [
+              id,
+              issuer,
+              apiBaseUrl,
+              redirectUri,
+              clientId,
+              clientSecretCiphertext,
+              clientSecretIv,
+              tokenEndpointAuthMethod,
+              scopes,
+              metadataJson,
+              ,
+              createdAt,
+              updatedAt,
+              expiresAt,
+            ] = statement.values;
+            const idText = String(id);
+            adminOAuthClients.set(idText, {
+              id: idText,
+              issuer: String(issuer),
+              api_base_url: String(apiBaseUrl),
+              redirect_uri: String(redirectUri),
+              client_id: String(clientId),
+              client_secret_ciphertext: typeof clientSecretCiphertext === "string" ? clientSecretCiphertext : null,
+              client_secret_iv: typeof clientSecretIv === "string" ? clientSecretIv : null,
+              token_endpoint_auth_method: String(tokenEndpointAuthMethod),
+              scopes: String(scopes),
+              metadata_json: String(metadataJson),
+              created_at: String(createdAt),
+              updated_at: String(updatedAt),
+              expires_at: typeof expiresAt === "string" ? expiresAt : null,
             });
             return d1Result<T>(1);
           }
@@ -260,6 +313,15 @@ export function createTestPreviewDb(seedPreviews: PreviewRow[] = [], seedAssets:
 
           if (normalizedQuery.startsWith("SELECT * FROM PREVIEW_ASSETS WHERE SLUG = ? AND ASSET_ID")) {
             return (assets.get(assetKey(String(statement.values[0]), String(statement.values[1]))) as T | undefined) ?? null;
+          }
+
+          if (normalizedQuery.startsWith("SELECT * FROM ADMIN_OAUTH_CLIENTS WHERE ISSUER")) {
+            const issuer = String(statement.values[0]);
+            const apiBaseUrl = String(statement.values[1]);
+            const row = [...adminOAuthClients.values()].find(
+              (client) => client.issuer === issuer && client.api_base_url === apiBaseUrl,
+            );
+            return (row as T | undefined) ?? null;
           }
 
           return null;

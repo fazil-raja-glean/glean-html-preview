@@ -22,7 +22,9 @@ These are the traps previous work on this repo actually hit.
 - Uploaded HTML is hostile content. Do not weaken `HTML_SECURITY_HEADERS`.
 - `PUBLIC_BASE_URL` is the preview origin, even when publish requests hit the API Worker.
 - Trusted publisher and audit attribution should come from server-side config, not caller-provided JSON.
-- Glean OAuth scopes should stay identity-only (`openid email`) unless the Worker itself starts calling broader Glean APIs.
+- Glean OAuth scopes should stay identity-only (`openid email`) unless the Worker itself starts calling broader Glean APIs. The admin flow hardcodes those identity scopes for the authorization request; do not add `GLEAN_OAUTH_SCOPES` back to `env.api.vars`.
+- Admin and MCP OAuth are intentionally different: admin uses Glean Dynamic Client Registration, while MCP keeps explicit configured OAuth clients. Do not reintroduce `GLEAN_OAUTH_CLIENT_ID` in `env.api.vars`.
+- Glean DCR can return a broader tenant-level scope set in registration metadata even when the Worker asks for `openid email`. Do not treat that metadata as the admin session permission envelope; the authorization request and consumed identity fields remain the boundary.
 - `PASSWORD_PEPPER` rotation invalidates existing preview passwords.
 - Custom slugs are D1 row identity. Soft-deleted and expired previews still reserve their slugs; only hard delete frees
   the slug. New R2 object keys should stay under `previews/objects/{random-id}/...`, not under the public slug.

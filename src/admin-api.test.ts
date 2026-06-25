@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { signAccessCookie } from "./security";
 import worker from "./index";
@@ -9,6 +9,10 @@ const adminEmail = "admin@example.com";
 const sessionSecret = "test-admin-session-secret";
 const tinyPngBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("admin UI and API", () => {
   it("redirects logged-out admins to login and supports local Glean identity bypass", async () => {
@@ -64,15 +68,14 @@ describe("admin UI and API", () => {
     expect(backslash.headers.get("Location")).toBe("/");
   });
 
-  it("starts production admin OAuth with the API-origin callback path", async () => {
-    const env = {
-      ...createAdminEnv([]),
-      API_BASE_URL: "https://api.example.test",
-      GLEAN_OAUTH_AUTHORIZATION_URL: "https://glean.example.test/oauth/authorize",
-      GLEAN_OAUTH_CLIENT_ID: "html-sharing-admin",
-      GLEAN_OAUTH_CLIENT_SECRET: "secret",
-      GLEAN_OAUTH_TOKEN_URL: "https://glean.example.test/oauth/token",
-    };
+  it("starts production admin OAuth through dynamic client registration", async () => {
+    const env = createProductionAdminEnv();
+    const requests = mockGleanOAuth({
+      client_id: "dynamic-html-sharing-admin",
+      client_secret: "dynamic-admin-secret",
+      token_endpoint_auth_method: "client_secret_post",
+      redirect_uris: ["https://api.example.test/auth/callback"],
+    });
 
     const response = await worker.fetch(
       new Request("https://api.example.test/login?return_to=/api/previews"),
@@ -83,11 +86,108 @@ describe("admin UI and API", () => {
 
     expect(response.status).toBe(302);
     expect(redirect.origin + redirect.pathname).toBe("https://glean.example.test/oauth/authorize");
-    expect(redirect.searchParams.get("client_id")).toBe("html-sharing-admin");
+    expect(redirect.searchParams.get("client_id")).toBe("dynamic-html-sharing-admin");
     expect(redirect.searchParams.get("redirect_uri")).toBe("https://api.example.test/auth/callback");
     expect(redirect.searchParams.get("scope")).toBe("openid email");
     expect(stateCookie).toContain("html_admin_oauth_state=");
     expect(stateCookie).toContain("Path=/auth");
+    expect(registrationRequest(requests)?.body).toContain("Glean HTML Preview Admin");
+  });
+
+  it("keeps production admin OAuth scopes identity-only even if the API env and DCR metadata are broader", async () => {
+    const env = {
+      ...createProductionAdminEnv(),
+      GLEAN_OAUTH_SCOPES: "openid email chat documents search",
+    };
+    const requests = mockGleanOAuth({
+      client_id: "dynamic-html-sharing-admin",
+      client_secret: "dynamic-admin-secret",
+      scope: "openid email chat documents search",
+      token_endpoint_auth_method: "client_secret_post",
+      redirect_uris: ["https://api.example.test/auth/callback"],
+    });
+
+    const response = await worker.fetch(new Request("https://api.example.test/login"), env as never);
+    const redirect = new URL(response.headers.get("Location") ?? "");
+    const registrationBody = JSON.parse(registrationRequest(requests)?.body ?? "{}") as { scope?: string };
+
+    expect(response.status).toBe(302);
+    expect(redirect.searchParams.get("scope")).toBe("openid email");
+    expect(registrationBody.scope).toBe("openid email");
+  });
+
+  it("fails closed when OAuth discovery metadata is invalid", async () => {
+    const env = {
+      ...createAdminEnv([]),
+      API_BASE_URL: "https://api.example.test",
+      ADMIN_DYNAMIC_OAUTH_ENCRYPTION_SECRET: "dynamic-oauth-encryption-secret",
+      GLEAN_OAUTH_DISCOVERY_URL: "https://glean.example.test/.well-known/oauth-authorization-server",
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("not-json", {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const response = await worker.fetch(new Request("https://api.example.test/login"), env as never);
+    const body = await response.json() as { error: { code: string } };
+
+    expect(response.status).toBe(500);
+    expect(body.error.code).toBe("glean_oauth_discovery_not_json");
+  });
+
+  it("completes production admin OAuth with a dynamic confidential client", async () => {
+    const env = createProductionAdminEnv();
+    const requests = mockGleanOAuth({
+      client_id: "dynamic-html-sharing-admin",
+      client_secret: "dynamic-admin-secret",
+      token_endpoint_auth_method: "client_secret_post",
+      redirect_uris: ["https://api.example.test/auth/callback"],
+    });
+    const login = await worker.fetch(new Request("https://api.example.test/login?return_to=/api/previews"), env as never);
+    const state = new URL(login.headers.get("Location") ?? "").searchParams.get("state");
+    const stateCookie = cookiePair(login);
+
+    const callback = await worker.fetch(
+      new Request(`https://api.example.test/auth/callback?code=glean-code&state=${state}`, {
+        headers: { Cookie: stateCookie },
+      }),
+      env as never,
+    );
+    const tokenBody = new URLSearchParams(tokenRequest(requests)?.body);
+
+    expect(callback.status).toBe(302);
+    expect(callback.headers.get("Location")).toBe("/api/previews");
+    expect(callback.headers.get("Set-Cookie")).toContain("html_admin_session=");
+    expect(tokenBody.get("client_id")).toBe("dynamic-html-sharing-admin");
+    expect(tokenBody.get("client_secret")).toBe("dynamic-admin-secret");
+    expect(tokenBody.get("code_verifier")).toBeTruthy();
+    expect(tokenBody.get("redirect_uri")).toBe("https://api.example.test/auth/callback");
+  });
+
+  it("completes production admin OAuth with a dynamic public PKCE client", async () => {
+    const env = createProductionAdminEnv();
+    const requests = mockGleanOAuth({
+      client_id: "public-html-sharing-admin",
+      token_endpoint_auth_method: "none",
+      redirect_uris: ["https://api.example.test/auth/callback"],
+    });
+    const login = await worker.fetch(new Request("https://api.example.test/login?return_to=/api/previews"), env as never);
+    const state = new URL(login.headers.get("Location") ?? "").searchParams.get("state");
+    const stateCookie = cookiePair(login);
+
+    const callback = await worker.fetch(
+      new Request(`https://api.example.test/auth/callback?code=glean-code&state=${state}`, {
+        headers: { Cookie: stateCookie },
+      }),
+      env as never,
+    );
+    const tokenBody = new URLSearchParams(tokenRequest(requests)?.body);
+
+    expect(callback.status).toBe(302);
+    expect(callback.headers.get("Set-Cookie")).toContain("html_admin_session=");
+    expect(tokenBody.get("client_id")).toBe("public-html-sharing-admin");
+    expect(tokenBody.has("client_secret")).toBe(false);
   });
 
   it("serves the client-rendered admin shell without exposing publish credentials", async () => {
@@ -650,6 +750,19 @@ function createAdminEnv(previews: PreviewRow[]): Record<string, unknown> {
   };
 }
 
+function createProductionAdminEnv(): Record<string, unknown> {
+  return {
+    ...createAdminEnv([]),
+    API_BASE_URL: "https://api.example.test",
+    ADMIN_DYNAMIC_OAUTH_ENCRYPTION_SECRET: "dynamic-oauth-encryption-secret",
+    GLEAN_OAUTH_AUTHORIZATION_URL: "https://glean.example.test/oauth/authorize",
+    GLEAN_OAUTH_ISSUER: "https://glean.example.test/oauth",
+    GLEAN_OAUTH_REGISTRATION_URL: "https://glean.example.test/oauth/register",
+    GLEAN_OAUTH_TOKEN_URL: "https://glean.example.test/oauth/token",
+    GLEAN_OAUTH_USERINFO_URL: "https://glean.example.test/oauth/userinfo",
+  };
+}
+
 function previewRow(overrides: Partial<PreviewRow> = {}): PreviewRow {
   return {
     slug: "abc123",
@@ -669,7 +782,53 @@ function previewRow(overrides: Partial<PreviewRow> = {}): PreviewRow {
 }
 
 function sessionCookie(response: Response): string {
+  return cookiePair(response);
+}
+
+function cookiePair(response: Response): string {
   const header = response.headers.get("Set-Cookie");
   expect(header).toBeTypeOf("string");
   return header?.split(";")[0] ?? "";
+}
+
+interface CapturedFetchRequest {
+  body: string;
+  url: string;
+}
+
+function mockGleanOAuth(registrationResponse: Record<string, unknown>): CapturedFetchRequest[] {
+  const requests: CapturedFetchRequest[] = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const body = init?.body instanceof URLSearchParams ? init.body.toString() : String(init?.body ?? "");
+    requests.push({ url, body });
+
+    if (url === "https://glean.example.test/oauth/register") {
+      return jsonResponse({ scope: "openid email", ...registrationResponse }, 201);
+    }
+    if (url === "https://glean.example.test/oauth/token") {
+      return jsonResponse({ access_token: "glean-access-token" });
+    }
+    if (url === "https://glean.example.test/oauth/userinfo") {
+      return jsonResponse({ email: adminEmail, email_verified: true });
+    }
+
+    throw new Error(`Unexpected fetch: ${url}`);
+  });
+  return requests;
+}
+
+function registrationRequest(requests: CapturedFetchRequest[]): CapturedFetchRequest | undefined {
+  return requests.find((request) => request.url.endsWith("/oauth/register"));
+}
+
+function tokenRequest(requests: CapturedFetchRequest[]): CapturedFetchRequest | undefined {
+  return requests.find((request) => request.url.endsWith("/oauth/token"));
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }

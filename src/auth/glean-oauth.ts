@@ -12,6 +12,13 @@ import { isLocalDevelopmentRequest } from "../origin-policy";
 import { ADMIN_OAUTH_CALLBACK_PATH, MCP_OAUTH_CALLBACK_PATH } from "../oauth-paths";
 import { signToken, verifyToken } from "../signed-token";
 import {
+  ADMIN_GLEAN_OAUTH_SCOPES,
+  getAdminDynamicOAuthClient,
+  type GleanAdminDynamicOAuthEnv,
+  type GleanOAuthProviderMetadata,
+  type GleanTokenEndpointAuthMethod,
+} from "./glean-admin-dcr";
+import {
   type AuthenticatedGleanUser,
   type IdentitySessionEnv,
   type IdentitySessionKind,
@@ -20,7 +27,7 @@ import {
   requireAllowedOAuthUser,
 } from "./session";
 
-export interface GleanOAuthEnv extends IdentitySessionEnv {
+export interface GleanOAuthEnv extends IdentitySessionEnv, GleanAdminDynamicOAuthEnv {
   API_BASE_URL?: string;
   GLEAN_OAUTH_AUTHORIZATION_URL?: string;
   GLEAN_OAUTH_CLIENT_ID?: string;
@@ -28,6 +35,7 @@ export interface GleanOAuthEnv extends IdentitySessionEnv {
   GLEAN_OAUTH_DISCOVERY_URL?: string;
   GLEAN_OAUTH_ISSUER?: string;
   GLEAN_OAUTH_JWKS_URL?: string;
+  GLEAN_OAUTH_REGISTRATION_URL?: string;
   GLEAN_OAUTH_SCOPES?: string;
   GLEAN_OAUTH_TOKEN_URL?: string;
   GLEAN_OAUTH_USERINFO_URL?: string;
@@ -47,10 +55,11 @@ export interface GleanOAuthFlow {
 interface GleanOAuthConfig {
   authorizationUrl: string;
   clientId: string;
-  clientSecret: string;
+  clientSecret?: string;
   issuer?: string;
   jwksUrl?: string;
   scopes: string;
+  tokenEndpointAuthMethod: GleanTokenEndpointAuthMethod;
   tokenUrl: string;
   userinfoUrl?: string;
 }
@@ -67,7 +76,7 @@ interface CachedGleanJwks {
   keys: RsaPublicJwk[];
 }
 
-const DEFAULT_GLEAN_OAUTH_SCOPES = "openid email";
+const DEFAULT_GLEAN_OAUTH_SCOPES = ADMIN_GLEAN_OAUTH_SCOPES;
 const GLEAN_JWKS_CACHE_MS = 10 * 60 * 1000;
 const JWT_CLOCK_SKEW_SECONDS = 60;
 const OAUTH_STATE_TTL_SECONDS = 10 * 60;
@@ -102,11 +111,11 @@ export async function startGleanOAuthLogin(
   flow: GleanOAuthFlow,
   returnTo: string,
 ): Promise<Response> {
-  const config = await gleanOAuthConfig(env);
+  const callbackUrl = callbackUrlForFlow(request, env, flow);
+  const config = await gleanOAuthConfig(env, flow, callbackUrl);
   const state = randomBase64Url(24);
   const codeVerifier = randomBase64Url(48);
   const codeChallenge = await s256CodeChallenge(codeVerifier);
-  const callbackUrl = callbackUrlForFlow(request, env, flow);
   const authorizationUrl = new URL(config.authorizationUrl);
   authorizationUrl.searchParams.set("response_type", "code");
   authorizationUrl.searchParams.set("client_id", config.clientId);
@@ -165,7 +174,8 @@ export async function completeGleanOAuthLogin(
     throw new HttpError(403, "invalid_oauth_state", "Glean OAuth state is invalid");
   }
 
-  const config = await gleanOAuthConfig(env);
+  const callbackUrl = callbackUrlForFlow(request, env, flow);
+  const config = await gleanOAuthConfig(env, flow, callbackUrl);
   const user = authorizeUserForFlow(await exchangeCodeForGleanUser(config, code, storedState.codeVerifier, request, env, flow), env, flow);
   const session = await createIdentitySession(user, env, flow.sessionKind);
 
@@ -190,19 +200,26 @@ async function exchangeCodeForGleanUser(
   env: GleanOAuthEnv,
   flow: GleanOAuthFlow,
 ): Promise<AuthenticatedGleanUser> {
+  const body = new URLSearchParams({
+    grant_type: "authorization_code",
+    client_id: config.clientId,
+    code,
+    code_verifier: codeVerifier,
+    redirect_uri: callbackUrlForFlow(request, env, flow),
+  });
+  if (config.tokenEndpointAuthMethod === "client_secret_post") {
+    if (!config.clientSecret) {
+      throw new HttpError(500, "missing_glean_oauth_client_secret", "Glean OAuth client secret is not configured");
+    }
+    body.set("client_secret", config.clientSecret);
+  }
+
   const tokenResponse = await fetch(config.tokenUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
     },
-    body: new URLSearchParams({
-      grant_type: "authorization_code",
-      client_id: config.clientId,
-      client_secret: config.clientSecret,
-      code,
-      code_verifier: codeVerifier,
-      redirect_uri: callbackUrlForFlow(request, env, flow),
-    }),
+    body,
   });
   if (!tokenResponse.ok) {
     throw new HttpError(401, "glean_token_exchange_failed", "Glean OAuth token exchange failed");
@@ -257,7 +274,32 @@ async function exchangeCodeForGleanUser(
   return user;
 }
 
-async function gleanOAuthConfig(env: GleanOAuthEnv): Promise<GleanOAuthConfig> {
+async function gleanOAuthConfig(env: GleanOAuthEnv, flow: GleanOAuthFlow, callbackUrl: string): Promise<GleanOAuthConfig> {
+  const provider = await gleanOAuthProviderMetadata(env);
+  if (flow.kind === "admin") {
+    const client = await getAdminDynamicOAuthClient(env, provider, {
+      callbackUrl,
+    });
+    return {
+      ...provider,
+      clientId: client.clientId,
+      ...(client.clientSecret ? { clientSecret: client.clientSecret } : {}),
+      scopes: ADMIN_GLEAN_OAUTH_SCOPES,
+      tokenEndpointAuthMethod: client.tokenEndpointAuthMethod,
+    };
+  }
+
+  const scopes = optionalString(env.GLEAN_OAUTH_SCOPES) ?? DEFAULT_GLEAN_OAUTH_SCOPES;
+  return {
+    ...provider,
+    clientId: requiredEnv(env.GLEAN_OAUTH_CLIENT_ID, "GLEAN_OAUTH_CLIENT_ID"),
+    clientSecret: requiredEnv(env.GLEAN_OAUTH_CLIENT_SECRET, "GLEAN_OAUTH_CLIENT_SECRET"),
+    scopes,
+    tokenEndpointAuthMethod: "client_secret_post",
+  };
+}
+
+async function gleanOAuthProviderMetadata(env: GleanOAuthEnv): Promise<GleanOAuthProviderMetadata> {
   const discovered = await discoveredOAuthConfig(env);
   return {
     authorizationUrl: configuredUrl(
@@ -280,9 +322,10 @@ async function gleanOAuthConfig(env: GleanOAuthEnv): Promise<GleanOAuthConfig> {
       optionalString(env.GLEAN_OAUTH_JWKS_URL) ?? optionalString(discovered?.jwks_uri),
       "GLEAN_OAUTH_JWKS_URL",
     ),
-    clientId: requiredEnv(env.GLEAN_OAUTH_CLIENT_ID, "GLEAN_OAUTH_CLIENT_ID"),
-    clientSecret: requiredEnv(env.GLEAN_OAUTH_CLIENT_SECRET, "GLEAN_OAUTH_CLIENT_SECRET"),
-    scopes: optionalString(env.GLEAN_OAUTH_SCOPES) ?? DEFAULT_GLEAN_OAUTH_SCOPES,
+    registrationUrl: optionalConfiguredUrl(
+      optionalString(env.GLEAN_OAUTH_REGISTRATION_URL) ?? optionalString(discovered?.registration_endpoint),
+      "GLEAN_OAUTH_REGISTRATION_URL",
+    ),
   };
 }
 
@@ -301,8 +344,18 @@ async function discoveredOAuthConfig(env: GleanOAuthEnv): Promise<Record<string,
     throw new HttpError(500, "glean_oauth_discovery_failed", "Glean OAuth discovery failed");
   }
 
-  const value = await response.json() as unknown;
-  return isRecord(value) ? value : null;
+  let value: unknown;
+  try {
+    value = await response.json();
+  } catch {
+    throw new HttpError(500, "glean_oauth_discovery_not_json", "Glean OAuth discovery response was not valid JSON");
+  }
+
+  if (!isRecord(value)) {
+    throw new HttpError(500, "glean_oauth_discovery_not_json", "Glean OAuth discovery response was not a JSON object");
+  }
+
+  return value;
 }
 
 function implicitDiscoveryUrlFromIssuer(env: GleanOAuthEnv): string | null {

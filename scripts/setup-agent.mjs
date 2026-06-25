@@ -61,6 +61,7 @@ function ensureDevVars() {
   const mcpClientSecret = secret();
   const mcpTokenSecret = secret();
   const adminBypassSecret = secret();
+  const adminDynamicOauthSecret = secret();
   const adminSessionSecret = secret();
   const gleanClientSecret = secret();
   const cookieSigningSecret = secret();
@@ -79,6 +80,7 @@ MCP_OAUTH_CLIENT_SECRET=${mcpClientSecret}
 MCP_OAUTH_TOKEN_SECRET=${mcpTokenSecret}
 ADMIN_ALLOWED_EMAIL_DOMAIN=example.com
 ADMIN_LOCAL_BYPASS_EMAIL=html-sharing@example.com
+ADMIN_DYNAMIC_OAUTH_ENCRYPTION_SECRET=${adminDynamicOauthSecret}
 ADMIN_SESSION_SECRET=${adminSessionSecret}
 GLEAN_OAUTH_CLIENT_ID=local-html-sharing-admin
 GLEAN_OAUTH_CLIENT_SECRET=${gleanClientSecret}

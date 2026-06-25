@@ -82,3 +82,22 @@ CREATE INDEX IF NOT EXISTS oauth_grants_client_kind_idx
 
 CREATE INDEX IF NOT EXISTS oauth_grants_expires_at_idx
   ON oauth_grants (expires_at);
+
+CREATE TABLE IF NOT EXISTS admin_oauth_clients (
+  id TEXT PRIMARY KEY,
+  issuer TEXT NOT NULL,
+  api_base_url TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  client_id TEXT NOT NULL,
+  client_secret_ciphertext TEXT,
+  client_secret_iv TEXT,
+  token_endpoint_auth_method TEXT NOT NULL,
+  scopes TEXT NOT NULL,
+  metadata_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  expires_at TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS admin_oauth_clients_issuer_api_base_url_idx
+  ON admin_oauth_clients (issuer, api_base_url);

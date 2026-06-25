@@ -11,6 +11,7 @@ MCP_OAUTH_CLIENT_SECRET=replace-with-random-local-secret
 MCP_OAUTH_TOKEN_SECRET=replace-with-random-local-token-secret
 ADMIN_ALLOWED_EMAIL_DOMAIN=example.com
 ADMIN_LOCAL_BYPASS_EMAIL=html-sharing@example.com
+ADMIN_DYNAMIC_OAUTH_ENCRYPTION_SECRET=replace-with-random-admin-dynamic-oauth-encryption-secret
 ADMIN_SESSION_SECRET=replace-with-random-local-admin-session-secret
 GLEAN_OAUTH_CLIENT_ID=local-html-sharing-admin
 GLEAN_OAUTH_CLIENT_SECRET=replace-with-random-local-glean-secret
