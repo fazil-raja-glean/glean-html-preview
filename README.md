@@ -31,6 +31,12 @@ The default MCP scope is `mcp:tools`.
 matching `images[]` entries with `name`, `mimeType`, and `dataBase64`. The API Worker stores those bytes in private
 R2 objects and rewrites the HTML to password-gated preview asset URLs.
 
+`publish_html_preview` also accepts an optional `slug`. Omit it to get the existing random preview URL. If you send
+one, it must be 3-80 lowercase letters, numbers, and single hyphens, with no leading or trailing hyphen. The Worker
+uses that exact slug or rejects the publish with `409 slug_taken`; it never auto-suffixes, suggests alternatives, or
+overwrites an existing preview. Soft-deleted and expired previews still reserve their slugs until hard delete removes
+the D1 row.
+
 Scripts are blocked by default. Set `allowScripts: true` only for interactive previews that need local JavaScript;
 the Worker still serves them without `allow-same-origin`, network access, forms, frames, or workers.
 

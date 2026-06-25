@@ -1,5 +1,10 @@
 import { HttpError, jsonResponse } from "./http";
 import { type McpOAuthAccessContext, type McpOAuthEnv, requireMcpOAuthAccessToken } from "./oauth";
+import {
+  CUSTOM_SLUG_MAX_LENGTH,
+  CUSTOM_SLUG_MIN_LENGTH,
+  CUSTOM_SLUG_PATTERN_SOURCE,
+} from "./publish-command";
 
 interface McpEnv extends McpOAuthEnv {
   PUBLISH_API?: Fetcher;
@@ -157,6 +162,14 @@ function publishHtmlPreviewTool(): Record<string, unknown> {
           type: "string",
           description:
             "Complete HTML document, including an html element. Use cid:image-name.png references for images supplied through images[].",
+        },
+        slug: {
+          type: "string",
+          minLength: CUSTOM_SLUG_MIN_LENGTH,
+          maxLength: CUSTOM_SLUG_MAX_LENGTH,
+          pattern: CUSTOM_SLUG_PATTERN_SOURCE,
+          description:
+            "Optional custom URL slug. If supplied, it must be available and is used exactly; conflicts return slug_taken.",
         },
         images: {
           type: "array",

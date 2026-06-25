@@ -35,6 +35,12 @@ export interface PreviewAssetUpload extends StoredPreviewAsset {
   bytes: Uint8Array;
 }
 
+export interface PreviewAssetUploadInput {
+  images: PreviewImageInput[];
+  slug: string;
+  storagePrefix: string;
+}
+
 export interface PreviewAssetRow {
   asset_id: string;
   byte_size: number;
@@ -116,14 +122,14 @@ export function parsePreviewImages(value: unknown, env: PreviewAssetLimitsEnv): 
   });
 }
 
-export function previewAssetUploads(slug: string, images: PreviewImageInput[]): PreviewAssetUpload[] {
-  return images.map((image) => {
+export function previewAssetUploads(input: PreviewAssetUploadInput): PreviewAssetUpload[] {
+  return input.images.map((image) => {
     const assetId = randomBase64Url(12);
     return {
-      slug,
+      slug: input.slug,
       assetId,
       originalName: image.name,
-      objectKey: `previews/${slug}/assets/${assetId}`,
+      objectKey: `${input.storagePrefix}/assets/${assetId}`,
       contentType: image.contentType,
       byteSize: image.byteSize,
       bytes: image.bytes,

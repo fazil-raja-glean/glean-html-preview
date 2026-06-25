@@ -24,6 +24,8 @@ These are the traps previous work on this repo actually hit.
 - Trusted publisher and audit attribution should come from server-side config, not caller-provided JSON.
 - Glean OAuth scopes should stay identity-only (`openid email`) unless the Worker itself starts calling broader Glean APIs.
 - `PASSWORD_PEPPER` rotation invalidates existing preview passwords.
+- Custom slugs are D1 row identity. Soft-deleted and expired previews still reserve their slugs; only hard delete frees
+  the slug. New R2 object keys should stay under `previews/objects/{random-id}/...`, not under the public slug.
 
 ## MCP And OAuth
 

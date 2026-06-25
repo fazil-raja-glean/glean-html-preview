@@ -20,6 +20,56 @@ describe("publish command password validation", () => {
     ).toBeNull();
   });
 
+  it("keeps custom slugs optional and exact", () => {
+    expect(
+      parsePreviewPublishInput(
+        {
+          title: "Random slug",
+          html: completeHtml,
+          password: "abcde",
+        },
+        {},
+      ).slug,
+    ).toBeNull();
+
+    expect(
+      parsePreviewPublishInput(
+        {
+          title: "Custom slug",
+          html: completeHtml,
+          password: "abcde",
+          slug: "hello-world-test",
+        },
+        {},
+      ).slug,
+    ).toBe("hello-world-test");
+  });
+
+  it.each([
+    "ab",
+    "Hello-World",
+    "hello_world",
+    "hello.world",
+    "hello/world",
+    "hello world",
+    "-hello",
+    "hello-",
+    "hello--world",
+    "a".repeat(81),
+  ])("rejects invalid custom slug %j", (slug) => {
+    expect(() =>
+      parsePreviewPublishInput(
+        {
+          title: "Bad slug",
+          html: completeHtml,
+          password: "abcde",
+          slug,
+        },
+        {},
+      ),
+    ).toThrow("Slug must be 3-80 characters and use lowercase letters, numbers, and single hyphens");
+  });
+
   it("keeps explicit future expiry timestamps", () => {
     expect(
       parsePreviewPublishInput(

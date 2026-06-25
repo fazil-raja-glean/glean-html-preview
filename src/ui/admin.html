@@ -40,6 +40,20 @@
                 required
               />
             </label>
+            <label class="field">
+              <span class="field-label">Custom slug</span>
+              <input
+                name="slug"
+                type="text"
+                minlength="3"
+                maxlength="80"
+                pattern="[a-z0-9]+(-[a-z0-9]+)*"
+                autocomplete="off"
+                autocapitalize="none"
+                spellcheck="false"
+                placeholder="hello-world-test"
+              />
+            </label>
           </div>
 
           <div class="dropzone" data-dropzone tabindex="0">

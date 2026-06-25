@@ -77,7 +77,7 @@ main {
 .field-grid {
   display: grid;
   gap: 14px;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   margin-bottom: 16px;
 }
 

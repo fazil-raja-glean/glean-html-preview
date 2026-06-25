@@ -31,6 +31,10 @@ export function createSlug(): string {
   return randomBase64Url(16);
 }
 
+export function createStorageId(): string {
+  return randomBase64Url(16);
+}
+
 export async function hashPassword(
   password: string,
   pepper: string,

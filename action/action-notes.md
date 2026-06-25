@@ -11,6 +11,8 @@
 - Configure Cloudflare Access only for legacy `/v1/html-previews*` direct API calls; do not put `/p/:slug`, the admin console at the API origin root, or `/mcp` behind Access for the preferred setup.
 - Publisher identity is configured server-side as `TRUSTED_PUBLISHER_EMAIL`; the action must not pass a user-supplied publisher email.
 - Require a password before calling the action. Generated passwords should be at least 5 characters.
+- Optional custom slugs must be lowercase letters, numbers, and single hyphens. If a requested slug is unavailable,
+  the API returns `409 slug_taken`; callers should surface that error instead of suggesting or retrying with variants.
 - Return the preview URL from the publish response. It will be on `${PUBLIC_BASE_URL}`; tell the user
   to share the password separately.
 - Uploaded HTML is served with a restrictive CSP sandbox: scripts, forms, frames, workers, objects, and remote network beacons are blocked.

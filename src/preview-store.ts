@@ -10,7 +10,7 @@ import {
   type PreviewAssetUpload,
   type PreviewImageInput,
 } from "./preview-assets";
-import { createSlug, hashPassword, type PasswordHash } from "./security";
+import { createSlug, createStorageId, hashPassword, type PasswordHash } from "./security";
 
 export interface PreviewStoreEnv {
   HTML_PREVIEWS: R2Bucket;
@@ -50,14 +50,20 @@ export interface CreatePreviewInput {
   images: PreviewImageInput[];
   password: string;
   publisherEmail: string;
+  slug: string | null;
   sourceUrl: string | null;
   title: string;
 }
 
 export async function createPreview(env: PreviewStoreEnv, input: CreatePreviewInput): Promise<PreviewRow> {
-  const slug = createSlug();
-  const objectKey = `previews/${slug}/index.html`;
-  const assets = previewAssetUploads(slug, input.images);
+  const slug = input.slug ?? createSlug();
+  const storagePrefix = previewStoragePrefix(createStorageId());
+  const objectKey = `${storagePrefix}/index.html`;
+  const assets = previewAssetUploads({
+    slug,
+    storagePrefix,
+    images: input.images,
+  });
   const now = new Date().toISOString();
   const password = await hashPassword(input.password, env.PASSWORD_PEPPER);
   const objectKeys = [objectKey, ...assets.map((asset) => asset.objectKey)];
@@ -80,7 +86,10 @@ export async function createPreview(env: PreviewStoreEnv, input: CreatePreviewIn
       createdAt: now,
     });
   } catch (error) {
-    await Promise.all(objectKeys.map((key) => env.HTML_PREVIEWS.delete(key)));
+    await deletePreviewObjectKeys(env, objectKeys);
+    if (input.slug && isPreviewSlugConflict(error)) {
+      throw new HttpError(409, "slug_taken", "Slug is already in use");
+    }
     throw error;
   }
 
@@ -279,6 +288,23 @@ function ensurePreviewIsNotDeleted(preview: PreviewRow): void {
   if (preview.deleted_at) {
     throw new HttpError(410, "preview_unpublished", "Preview has been unpublished");
   }
+}
+
+async function deletePreviewObjectKeys(env: PreviewStoreEnv, objectKeys: string[]): Promise<void> {
+  try {
+    await Promise.all(objectKeys.map((key) => env.HTML_PREVIEWS.delete(key)));
+  } catch (error) {
+    console.error("preview_object_cleanup_failed", error);
+  }
+}
+
+function isPreviewSlugConflict(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:UNIQUE|PRIMARY KEY) constraint failed: previews\.slug/i.test(message);
+}
+
+function previewStoragePrefix(storageId: string): string {
+  return `previews/objects/${storageId}`;
 }
 
 export function normalizePreviewExpiresAt(value: string | null): string | null {

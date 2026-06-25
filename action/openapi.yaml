@@ -32,6 +32,12 @@ paths:
                 html:
                   type: string
                   description: Complete HTML document to publish. Use cid:image-name.png references for images supplied through images.
+                slug:
+                  type: string
+                  minLength: 3
+                  maxLength: 80
+                  pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                  description: Optional custom URL slug. If supplied, it must be available and is used exactly; conflicts return slug_taken.
                 images:
                   type: array
                   description: Optional image attachments stored separately in R2 and served through the preview password gate.
@@ -97,10 +103,14 @@ paths:
                     nullable: true
                   status:
                     type: string
+        "400":
+          description: Invalid publish request, including invalid_slug for malformed custom slugs.
         "401":
           description: Missing bearer token or Cloudflare Access service token.
         "403":
           description: Invalid bearer token or Cloudflare Access service token.
+        "409":
+          description: Requested custom slug is already in use.
         "429":
           description: Publish request was rate limited.
 components:

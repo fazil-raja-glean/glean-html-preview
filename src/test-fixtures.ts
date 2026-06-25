@@ -45,11 +45,11 @@ interface TestOAuthGrantRow {
   scope: string;
 }
 
-export function createTestPreviewDb(seedPreviews: PreviewRow[] = []): D1Database {
+export function createTestPreviewDb(seedPreviews: PreviewRow[] = [], seedAssets: PreviewAssetRow[] = []): D1Database {
   const oauthGrants = new Map<string, TestOAuthGrantRow>();
   const previews = new Map(seedPreviews.map((preview) => [preview.slug, { ...preview }]));
   const previewSettings = new Map<string, PreviewSettingsRow>();
-  const assets = new Map<string, PreviewAssetRow>();
+  const assets = new Map(seedAssets.map((asset) => [assetKey(asset.slug, asset.asset_id), { ...asset }]));
   const auditEvents: AuditEventRow[] = [];
 
   return {
@@ -92,8 +92,12 @@ export function createTestPreviewDb(seedPreviews: PreviewRow[] = []): D1Database
               createdAt,
               expiresAt,
             ] = statement.values;
-            previews.set(String(slug), {
-              slug: String(slug),
+            const slugText = String(slug);
+            if (previews.has(slugText)) {
+              throw new Error("D1_ERROR: UNIQUE constraint failed: previews.slug");
+            }
+            previews.set(slugText, {
+              slug: slugText,
               title: String(title),
               object_key: String(objectKey),
               password_hash: String(passwordHash),
@@ -111,8 +115,12 @@ export function createTestPreviewDb(seedPreviews: PreviewRow[] = []): D1Database
 
           if (normalizedQuery.startsWith("INSERT INTO PREVIEW_SETTINGS")) {
             const [slug, allowScripts, createdAt] = statement.values;
-            previewSettings.set(String(slug), {
-              slug: String(slug),
+            const slugText = String(slug);
+            if (previewSettings.has(slugText)) {
+              throw new Error("D1_ERROR: UNIQUE constraint failed: preview_settings.slug");
+            }
+            previewSettings.set(slugText, {
+              slug: slugText,
               allow_scripts: Number(allowScripts),
               created_at: String(createdAt),
             });
@@ -121,9 +129,15 @@ export function createTestPreviewDb(seedPreviews: PreviewRow[] = []): D1Database
 
           if (normalizedQuery.startsWith("INSERT INTO PREVIEW_ASSETS")) {
             const [slug, assetId, objectKey, contentType, byteSize, originalName, createdAt] = statement.values;
-            assets.set(assetKey(String(slug), String(assetId)), {
-              slug: String(slug),
-              asset_id: String(assetId),
+            const slugText = String(slug);
+            const assetIdText = String(assetId);
+            const key = assetKey(slugText, assetIdText);
+            if (assets.has(key)) {
+              throw new Error("D1_ERROR: UNIQUE constraint failed: preview_assets.slug, preview_assets.asset_id");
+            }
+            assets.set(key, {
+              slug: slugText,
+              asset_id: assetIdText,
               object_key: String(objectKey),
               content_type: String(contentType) as PreviewAssetRow["content_type"],
               byte_size: Number(byteSize),
@@ -159,7 +173,15 @@ export function createTestPreviewDb(seedPreviews: PreviewRow[] = []): D1Database
           }
 
           if (normalizedQuery.startsWith("DELETE FROM PREVIEWS")) {
-            return d1Result<T>(previews.delete(String(statement.values[0])) ? 1 : 0);
+            const slug = String(statement.values[0]);
+            const deleted = previews.delete(slug);
+            previewSettings.delete(slug);
+            for (const key of assets.keys()) {
+              if (key.startsWith(`${slug}:`)) {
+                assets.delete(key);
+              }
+            }
+            return d1Result<T>(deleted ? 1 : 0);
           }
 
           if (normalizedQuery.startsWith("DELETE FROM PREVIEW_ASSETS")) {

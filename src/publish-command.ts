@@ -9,6 +9,7 @@ export interface PublishCommand {
   images: PreviewImageInput[];
   password: string;
   publisherEmail: string;
+  slug: string | null;
   sourceUrl: string | null;
   title: string;
 }
@@ -19,6 +20,7 @@ export interface PreviewPublishInput {
   html: string;
   images: PreviewImageInput[];
   password: string;
+  slug: string | null;
   sourceUrl: string | null;
   title: string;
 }
@@ -38,6 +40,10 @@ interface PublishCommandEnv extends PreviewAssetLimitsEnv {
 const DEFAULT_MAX_HTML_BYTES = 10_000_000;
 const MIN_PASSWORD_LENGTH = 5;
 const MAX_PASSWORD_LENGTH = 256;
+export const CUSTOM_SLUG_MIN_LENGTH = 3;
+export const CUSTOM_SLUG_MAX_LENGTH = 80;
+export const CUSTOM_SLUG_PATTERN_SOURCE = "^[a-z0-9]+(?:-[a-z0-9]+)*$";
+const CUSTOM_SLUG_PATTERN = new RegExp(CUSTOM_SLUG_PATTERN_SOURCE);
 
 export function parsePublishCommand(
   body: Record<string, unknown>,
@@ -56,6 +62,7 @@ export function parsePreviewPublishInput(body: Record<string, unknown>, env: Pub
   const password = requireString(body.password, "password");
   const expiresAt = parseExpiresAt(body.expiresAt);
   const sourceUrl = parseOptionalUrl(body.sourceUrl, "sourceUrl");
+  const slug = parseOptionalSlug(body.slug);
   const images = parsePreviewImages(body.images, env);
   const allowScripts = parseOptionalBoolean(body.allowScripts, "allowScripts");
   const maxHtmlBytes = parsePositiveInteger(env.MAX_HTML_BYTES, DEFAULT_MAX_HTML_BYTES);
@@ -80,6 +87,7 @@ export function parsePreviewPublishInput(body: Record<string, unknown>, env: Pub
     images,
     allowScripts,
     password,
+    slug,
     expiresAt,
     sourceUrl,
   };
@@ -143,6 +151,27 @@ function parseOptionalUrl(value: unknown, field: string): string | null {
   } catch {
     throw new HttpError(400, "invalid_url", `${field} must be a valid URL`);
   }
+}
+
+function parseOptionalSlug(value: unknown): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  if (
+    typeof value !== "string" ||
+    value.length < CUSTOM_SLUG_MIN_LENGTH ||
+    value.length > CUSTOM_SLUG_MAX_LENGTH ||
+    !CUSTOM_SLUG_PATTERN.test(value)
+  ) {
+    throw new HttpError(
+      400,
+      "invalid_slug",
+      "Slug must be 3-80 characters and use lowercase letters, numbers, and single hyphens",
+    );
+  }
+
+  return value;
 }
 
 function parseExpiresAt(value: unknown): string | null {

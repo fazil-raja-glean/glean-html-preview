@@ -317,6 +317,7 @@
     const form = els.uploadForm;
     const title = form.elements.title.value.trim();
     const password = form.elements.password.value;
+    const slug = form.elements.slug.value.trim();
     const html = els.htmlInput.value;
 
     if (!title || !password || !html.trim()) {
@@ -326,12 +327,17 @@
 
     els.uploadSubmit.disabled = true;
     try {
-      const response = await postJson("/api/previews", {
+      const payload = {
         csrf: csrf,
         title: title,
         password: password,
         html: html,
-      });
+      };
+      if (slug) {
+        payload.slug = slug;
+      }
+
+      const response = await postJson("/api/previews", payload);
       const body = await readJson(response);
       if (!response.ok || !body) {
         showError(els.uploadError, apiErrorMessage(body, "Upload failed."));

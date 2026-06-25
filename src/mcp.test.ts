@@ -77,6 +77,11 @@ describe("MCP endpoint", () => {
                 password: {
                   minLength: 5,
                 },
+                slug: {
+                  minLength: 3,
+                  maxLength: 80,
+                  pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                },
               },
             },
           },
@@ -133,6 +138,7 @@ describe("MCP endpoint", () => {
           ],
           allowScripts: true,
           password: "correct horse battery",
+          slug: "hello-world-test",
           sourceUrl: "https://source.example.test/artifacts/test",
         },
       }),
@@ -187,6 +193,7 @@ describe("MCP endpoint", () => {
       ],
       allowScripts: true,
       password: "correct horse battery",
+      slug: "hello-world-test",
       sourceUrl: "https://source.example.test/artifacts/test",
     });
   });

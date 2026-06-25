@@ -148,6 +148,7 @@ describe("admin UI and API", () => {
           csrf,
           title: "Uploaded Page",
           password: "correct horse",
+          slug: "admin-upload-test",
           html: "<!doctype html><html><body>hi</body></html>",
         }),
       }),
@@ -155,7 +156,7 @@ describe("admin UI and API", () => {
     );
     expect(created.status).toBe(201);
     const createdBody = (await created.json()) as { expiresAt: string | null; slug: string; url: string };
-    expect(createdBody.slug).toBeTruthy();
+    expect(createdBody.slug).toBe("admin-upload-test");
     expect(createdBody.url).toContain("/p/" + createdBody.slug);
     expect(createdBody.expiresAt).toBeNull();
 

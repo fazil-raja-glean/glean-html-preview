@@ -422,11 +422,16 @@ copyable `link:`/`password:` block (passwords are hashed, so this is only availa
 Editing the UI means editing `src/ui/admin.{html,css,js}` and re-running `npm run build:admin`
 (`check`, `test`, `dev`, and `deploy` run it automatically via pre-hooks).
 
+Publish requests can include an optional `slug`. Omit it to keep the generated random slug behavior. If supplied, it
+must be 3-80 lowercase letters, numbers, and single hyphens, with no leading or trailing hyphen. The Worker uses that
+exact slug or returns `409 slug_taken`; it does not suggest alternatives, auto-suffix, or overwrite existing previews.
+Soft-deleted and expired preview rows still reserve their slugs. Hard delete frees a slug because it removes the D1 row.
+
 HTML can reference attached images with `cid:name` URLs. API and MCP callers pass those images in an `images`
-array with `name`, `mimeType`, and `dataBase64`; the API Worker stores them under the same R2 preview prefix
-and rewrites the HTML to `/p/{slug}/assets/{assetId}`. Asset routes require the same viewer password cookie as
-the HTML page, so image bytes remain private R2 objects rather than public bucket URLs. The default limits are
-`MAX_HTML_BYTES=10000000`, `MAX_IMAGES_PER_PREVIEW=25`, `MAX_IMAGE_BYTES=5000000`, and
+array with `name`, `mimeType`, and `dataBase64`; the API Worker stores new HTML and asset bytes under
+`previews/objects/{random-id}/...` and rewrites the HTML to `/p/{slug}/assets/{assetId}`. Asset routes require the same
+viewer password cookie as the HTML page, so image bytes remain private R2 objects rather than public bucket URLs. The
+default limits are `MAX_HTML_BYTES=10000000`, `MAX_IMAGES_PER_PREVIEW=25`, `MAX_IMAGE_BYTES=5000000`, and
 `MAX_TOTAL_IMAGE_BYTES=25000000`.
 
 Scripts are blocked by default. Set `allowScripts: true` only when a preview needs local interactivity. Interactive
@@ -442,6 +447,7 @@ curl -i http://localhost:8787/v1/html-previews \
   -H "Content-Type: application/json" \
   --data '{
     "title": "Local smoke test",
+    "slug": "local-smoke-test",
     "html": "<!doctype html><html><body><h1>Hello</h1></body></html>",
     "password": "correct horse battery"
   }'
