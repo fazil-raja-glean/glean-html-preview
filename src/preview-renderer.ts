@@ -33,6 +33,33 @@ const HTML_SECURITY_HEADER_BASE = {
   "X-Frame-Options": "DENY",
 };
 
+const GLEAN_GENERATED_HTML_SCRIPT_SOURCES = [
+  "https://cdn.jsdelivr.net",
+  "https://unpkg.com",
+  "https://cdnjs.cloudflare.com",
+  "https://esm.sh",
+  "https://cdn.tailwindcss.com",
+  "https://cdn.plot.ly",
+  "https://d3js.org",
+  "https://cdn.sheetjs.com",
+  "https://ajax.googleapis.com",
+];
+
+const GLEAN_GENERATED_HTML_STYLE_SOURCES = [
+  "https://fonts.googleapis.com",
+  "https://cdn.jsdelivr.net",
+  "https://unpkg.com",
+  "https://cdnjs.cloudflare.com",
+  "https://esm.sh",
+  "https://cdn.tailwindcss.com",
+];
+
+const GLEAN_GENERATED_HTML_FONT_SOURCES = [
+  "https://fonts.gstatic.com",
+  "https://cdn.jsdelivr.net",
+  "https://cdnjs.cloudflare.com",
+];
+
 export async function handlePreviewRequest(
   request: Request,
   env: PreviewRenderEnv,
@@ -102,10 +129,13 @@ function previewContentSecurityPolicy(
   options: PreviewRenderOptions,
 ): string {
   const sandbox = options.allowScripts ? "sandbox allow-scripts" : "sandbox";
-  const scriptSrc = options.allowScripts ? "script-src 'unsafe-inline'" : "script-src 'none'";
+  const scriptSources = ["'unsafe-inline'", ...GLEAN_GENERATED_HTML_SCRIPT_SOURCES].join(" ");
+  const scriptSrc = options.allowScripts ? `script-src ${scriptSources}` : "script-src 'none'";
+  const styleSources = ["'unsafe-inline'", ...GLEAN_GENERATED_HTML_STYLE_SOURCES].join(" ");
+  const fontSources = ["data:", ...GLEAN_GENERATED_HTML_FONT_SOURCES].join(" ");
   const navigateTo = options.allowScripts ? "; navigate-to 'none'" : "";
 
-  return `${sandbox}; default-src 'none'; ${scriptSrc}; script-src-attr 'none'; style-src 'unsafe-inline'; img-src ${previewOriginValue} data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; frame-ancestors 'none'${navigateTo}`;
+  return `${sandbox}; default-src 'none'; ${scriptSrc}; script-src-attr 'none'; style-src ${styleSources}; img-src ${previewOriginValue} data: blob:; media-src data: blob:; font-src ${fontSources}; connect-src 'none'; form-action 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; frame-ancestors 'none'${navigateTo}`;
 }
 
 function previewOrigin(request: Request, env: PreviewRenderEnv): string {

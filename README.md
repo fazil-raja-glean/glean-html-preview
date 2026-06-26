@@ -39,8 +39,11 @@ uses that exact slug or rejects the publish with `409 slug_taken`; it never auto
 overwrites an existing preview. Soft-deleted and expired previews still reserve their slugs until hard delete removes
 the D1 row.
 
-Scripts are blocked by default. Set `allowScripts: true` only for interactive previews that need local JavaScript;
-the Worker still serves them without `allow-same-origin`, network access, forms, frames, or workers.
+Scripts are blocked by default. Set `allowScripts: true` only for interactive previews that need local JavaScript.
+Interactive previews may load common Glean-generated artifact assets from `cdn.jsdelivr.net`, `unpkg.com`,
+`cdnjs.cloudflare.com`, `esm.sh`, `cdn.tailwindcss.com`, `cdn.plot.ly`, `d3js.org`, `cdn.sheetjs.com`,
+`ajax.googleapis.com`, `fonts.googleapis.com`, and `fonts.gstatic.com`. The Worker still serves them without
+`allow-same-origin`, runtime `connect-src` network access, forms, frames, or workers.
 
 ### Glean
 

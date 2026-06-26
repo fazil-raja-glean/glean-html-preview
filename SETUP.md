@@ -441,8 +441,11 @@ default limits are `MAX_HTML_BYTES=10000000`, `MAX_IMAGES_PER_PREVIEW=25`, `MAX_
 `MAX_TOTAL_IMAGE_BYTES=25000000`.
 
 Scripts are blocked by default. Set `allowScripts: true` only when a preview needs local interactivity. Interactive
-previews use `sandbox allow-scripts` without `allow-same-origin`, and still keep `connect-src 'none'`,
-`form-action 'none'`, `frame-src 'none'`, `worker-src 'none'`, and `navigate-to 'none'`.
+previews may load common Glean-generated artifact assets from `cdn.jsdelivr.net`, `unpkg.com`,
+`cdnjs.cloudflare.com`, `esm.sh`, `cdn.tailwindcss.com`, `cdn.plot.ly`, `d3js.org`, `cdn.sheetjs.com`,
+`ajax.googleapis.com`, `fonts.googleapis.com`, and `fonts.gstatic.com`, while still using `sandbox allow-scripts`
+without `allow-same-origin` and keeping `connect-src 'none'`, `form-action 'none'`, `frame-src 'none'`,
+`worker-src 'none'`, and `navigate-to 'none'`.
 
 Publish locally through the API route:
 

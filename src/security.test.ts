@@ -101,7 +101,18 @@ describe("preview HTML security headers", () => {
     expect(csp).toContain("sandbox allow-scripts");
     expect(csp).not.toContain("allow-same-origin");
     expect(csp).toContain("script-src 'unsafe-inline'");
+    expect(csp).toContain("https://cdn.jsdelivr.net");
+    expect(csp).toContain("https://unpkg.com");
+    expect(csp).toContain("https://cdnjs.cloudflare.com");
+    expect(csp).toContain("https://esm.sh");
+    expect(csp).toContain("https://cdn.tailwindcss.com");
+    expect(csp).toContain("https://cdn.plot.ly");
+    expect(csp).toContain("https://d3js.org");
+    expect(csp).toContain("https://cdn.sheetjs.com");
+    expect(csp).toContain("https://ajax.googleapis.com");
     expect(csp).toContain("script-src-attr 'none'");
+    expect(csp).toContain("style-src 'unsafe-inline' https://fonts.googleapis.com");
+    expect(csp).toContain("font-src data: https://fonts.gstatic.com");
     expect(csp).toContain("connect-src 'none'");
     expect(csp).toContain("form-action 'none'");
     expect(csp).toContain("frame-src 'none'");
@@ -110,6 +121,7 @@ describe("preview HTML security headers", () => {
     expect(csp).not.toContain("script-src 'none'");
     expect(csp).not.toContain("connect-src https:");
     expect(csp).not.toContain("script-src https:");
+    expect(csp).not.toContain("script-src-elem https:");
   });
 });
 
