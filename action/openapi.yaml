@@ -22,6 +22,7 @@ paths:
               type: object
               additionalProperties: false
               required:
+                - slug
                 - title
                 - html
                 - password
@@ -37,7 +38,7 @@ paths:
                   minLength: 3
                   maxLength: 80
                   pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"
-                  description: Optional custom URL slug. If supplied, it must be available and is used exactly; conflicts return slug_taken.
+                  description: Required URL slug. It must be available and is used exactly; conflicts return slug_taken.
                 images:
                   type: array
                   description: Optional image attachments stored separately in R2 and served through the preview password gate.
@@ -63,10 +64,6 @@ paths:
                       dataBase64:
                         type: string
                         description: Base64 image bytes. Data URLs are accepted.
-                allowScripts:
-                  type: boolean
-                  default: false
-                  description: Opt in to local JavaScript execution. Scripts run in a sandbox without allow-same-origin, network access, forms, frames, or workers.
                 password:
                   type: string
                   minLength: 5
@@ -113,6 +110,147 @@ paths:
           description: Requested custom slug is already in use.
         "429":
           description: Publish request was rate limited.
+  /v1/html-previews/{slug}:
+    put:
+      operationId: updateHtmlPreview
+      summary: Replace an existing preview's HTML and image attachments
+      security:
+        - publishBearer: []
+          cloudflareAccessClientId: []
+          cloudflareAccessClientSecret: []
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - html
+              properties:
+                title:
+                  type: string
+                  maxLength: 160
+                html:
+                  type: string
+                  description: Replacement complete HTML document. Use cid:image-name.png references for images supplied through images.
+                images:
+                  type: array
+                  description: Complete replacement image attachment set. Omit or pass an empty array for no attachments.
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required:
+                      - name
+                      - mimeType
+                      - dataBase64
+                    properties:
+                      name:
+                        type: string
+                        description: Unique cid name, for example proof.png.
+                      mimeType:
+                        type: string
+                        enum:
+                          - image/png
+                          - image/jpeg
+                          - image/webp
+                          - image/gif
+                          - image/avif
+                      dataBase64:
+                        type: string
+                        description: Base64 image bytes. Data URLs are accepted.
+                expiresAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+                  description: Optional replacement expiry timestamp. Pass null to remove expiry.
+                sourceUrl:
+                  type: string
+                  format: uri
+                  nullable: true
+                  description: Optional replacement source artifact URL. Pass null to clear it.
+      responses:
+        "200":
+          description: Updated preview link. The URL and viewer password are preserved.
+        "400":
+          description: Invalid update request.
+        "401":
+          description: Missing bearer token or Cloudflare Access service token.
+        "403":
+          description: Invalid bearer token or Cloudflare Access service token.
+        "404":
+          description: Preview was not found or is not owned by the caller.
+        "410":
+          description: Preview is unpublished or expired.
+    delete:
+      operationId: deleteHtmlPreview
+      summary: Hard-delete an existing preview and free its slug
+      security:
+        - publishBearer: []
+          cloudflareAccessClientId: []
+          cloudflareAccessClientSecret: []
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted preview.
+        "401":
+          description: Missing bearer token or Cloudflare Access service token.
+        "403":
+          description: Invalid bearer token or Cloudflare Access service token.
+        "404":
+          description: Preview was not found or is not owned by the caller.
+  /v1/html-previews/{slug}/password:
+    post:
+      operationId: updateHtmlPreviewPassword
+      summary: Rotate an existing preview's viewer password
+      security:
+        - publishBearer: []
+          cloudflareAccessClientId: []
+          cloudflareAccessClientSecret: []
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - password
+              properties:
+                password:
+                  type: string
+                  minLength: 5
+                  description: New viewer password.
+      responses:
+        "200":
+          description: Password rotated. Existing viewer cookies are invalidated.
+        "400":
+          description: Invalid password.
+        "401":
+          description: Missing bearer token or Cloudflare Access service token.
+        "403":
+          description: Invalid bearer token or Cloudflare Access service token.
+        "404":
+          description: Preview was not found or is not owned by the caller.
+        "410":
+          description: Preview is unpublished.
 components:
   securitySchemes:
     publishBearer:

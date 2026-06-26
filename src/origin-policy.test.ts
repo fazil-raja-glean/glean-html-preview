@@ -12,6 +12,16 @@ describe("route origin policy", () => {
       slug: "abc123",
       surface: "api",
     });
+    expect(routeForPath("/v1/html-previews/abc123")).toEqual({
+      kind: "htmlPreview",
+      slug: "abc123",
+      surface: "api",
+    });
+    expect(routeForPath("/v1/html-previews/abc123/password")).toEqual({
+      kind: "rotatePassword",
+      slug: "abc123",
+      surface: "api",
+    });
     expect(routeForPath("/mcp")).toEqual({ kind: "mcp", surface: "mcp" });
     expect(routeForPath("/oauth/token")).toEqual({ action: "token", kind: "oauth", surface: "mcp" });
     expect(routeForPath("/oauth/callback")).toEqual({ action: "callback", kind: "oauth", surface: "mcp" });

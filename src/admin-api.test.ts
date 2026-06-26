@@ -285,6 +285,7 @@ describe("admin UI and API", () => {
           csrf,
           title: "Image Page",
           password: "correct horse",
+          slug: "image-page",
           html: '<!doctype html><html><body><img alt="proof" src="cid:proof.png"></body></html>',
           images: [
             {
@@ -348,7 +349,7 @@ describe("admin UI and API", () => {
     expect(assetBytes.length).toBeGreaterThan(8);
   });
 
-  it("allows scripts only for previews that opt in to interactive mode", async () => {
+  it("allows scripts for previews inside the sandbox", async () => {
     const env = createAdminEnv([]);
     const { cookie, csrf } = await adminSession(env);
 
@@ -360,7 +361,7 @@ describe("admin UI and API", () => {
           csrf,
           title: "Interactive Page",
           password: "correct horse",
-          allowScripts: true,
+          slug: "interactive-page",
           html: "<!doctype html><html><body><script>document.body.dataset.ready='yes'</script></body></html>",
         }),
       }),
@@ -419,6 +420,7 @@ describe("admin UI and API", () => {
       csrf,
       title: "X",
       password: "correct horse",
+      slug: "admin-invalid-input",
       html: "<!doctype html><html><body>hi</body></html>",
     };
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parsePreviewPublishInput, parseRotatePasswordCommand } from "./publish-command";
+import { parsePreviewHtmlUpdateInput, parsePreviewPublishInput, parseRotatePasswordCommand } from "./publish-command";
 
 const completeHtml = "<!doctype html><html><body><h1>Preview</h1></body></html>";
 const tinyPngBase64 =
@@ -13,6 +13,7 @@ describe("publish command password validation", () => {
         {
           title: "No expiry",
           html: completeHtml,
+          slug: "no-expiry",
           password: "abcde",
         },
         {},
@@ -20,17 +21,17 @@ describe("publish command password validation", () => {
     ).toBeNull();
   });
 
-  it("keeps custom slugs optional and exact", () => {
-    expect(
+  it("requires a slug and keeps it exact", () => {
+    expect(() =>
       parsePreviewPublishInput(
         {
-          title: "Random slug",
+          title: "Missing slug",
           html: completeHtml,
           password: "abcde",
         },
         {},
-      ).slug,
-    ).toBeNull();
+      ),
+    ).toThrow("slug is required");
 
     expect(
       parsePreviewPublishInput(
@@ -77,6 +78,7 @@ describe("publish command password validation", () => {
           title: "Explicit expiry",
           html: completeHtml,
           password: "abcde",
+          slug: "explicit-expiry",
           expiresAt: "2099-01-01T00:00:00.000Z",
         },
         {},
@@ -91,6 +93,7 @@ describe("publish command password validation", () => {
           title: "Short password",
           html: completeHtml,
           password: "abcde",
+          slug: "short-password",
         },
         {},
       ).password,
@@ -99,43 +102,29 @@ describe("publish command password validation", () => {
     expect(parseRotatePasswordCommand({ password: "abcde" }).password).toBe("abcde");
   });
 
-  it("keeps scripts disabled by default and accepts explicit interactive mode", () => {
-    expect(
-      parsePreviewPublishInput(
-        {
-          title: "Static preview",
-          html: completeHtml,
-          password: "abcde",
-        },
-        {},
-      ).allowScripts,
-    ).toBe(false);
-
-    expect(
-      parsePreviewPublishInput(
-        {
-          title: "Interactive preview",
-          html: completeHtml,
-          password: "abcde",
-          allowScripts: true,
-        },
-        {},
-      ).allowScripts,
-    ).toBe(true);
-  });
-
-  it("rejects non-boolean interactive mode values", () => {
+  it("rejects removed allowScripts input", () => {
     expect(() =>
       parsePreviewPublishInput(
         {
           title: "Bad mode",
           html: completeHtml,
           password: "abcde",
-          allowScripts: "true",
+          slug: "bad-mode",
+          allowScripts: true,
         },
         {},
       ),
-    ).toThrow("allowScripts must be a boolean");
+    ).toThrow("allowScripts is not supported");
+
+    expect(() =>
+      parsePreviewHtmlUpdateInput(
+        {
+          html: completeHtml,
+          allowScripts: true,
+        },
+        {},
+      ),
+    ).toThrow("allowScripts is not supported");
   });
 
   it("accepts image attachments separately from the HTML string", () => {
@@ -144,6 +133,7 @@ describe("publish command password validation", () => {
         title: "Image preview",
         html: '<!doctype html><html><body><img src="cid:proof.png"></body></html>',
         password: "abcde",
+        slug: "image-preview",
         images: [
           {
             name: "proof.png",
@@ -170,6 +160,7 @@ describe("publish command password validation", () => {
           title: "Bad image",
           html: completeHtml,
           password: "abcde",
+          slug: "bad-image",
           images: [
             {
               name: "../proof.png",
@@ -188,6 +179,7 @@ describe("publish command password validation", () => {
           title: "Duplicate image",
           html: completeHtml,
           password: "abcde",
+          slug: "duplicate-image",
           images: [
             {
               name: "proof.png",
@@ -213,6 +205,7 @@ describe("publish command password validation", () => {
           title: "Too short",
           html: completeHtml,
           password: "abcd",
+          slug: "too-short",
         },
         {},
       ),
@@ -221,5 +214,37 @@ describe("publish command password validation", () => {
     expect(() => parseRotatePasswordCommand({ password: "abcd" })).toThrow(
       "Password must be between 5 and 256 characters",
     );
+  });
+
+  it("parses HTML updates without accepting password changes", () => {
+    const input = parsePreviewHtmlUpdateInput(
+      {
+        title: "Updated preview",
+        html: completeHtml,
+        expiresAt: null,
+        sourceUrl: "https://source.example.test/artifacts/updated",
+      },
+      {},
+    );
+
+    expect(input).toMatchObject({
+      title: "Updated preview",
+      html: completeHtml,
+      images: [],
+      expiresAt: null,
+      sourceUrl: "https://source.example.test/artifacts/updated",
+    });
+  });
+
+  it("rejects password on HTML updates so rotation stays explicit", () => {
+    expect(() =>
+      parsePreviewHtmlUpdateInput(
+        {
+          html: completeHtml,
+          password: "new password",
+        },
+        {},
+      ),
+    ).toThrow("password is not supported");
   });
 });

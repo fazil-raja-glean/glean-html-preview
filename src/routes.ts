@@ -63,6 +63,11 @@ export type Route =
       surface: "api";
     }
   | {
+      kind: "htmlPreview";
+      slug: string;
+      surface: "api";
+    }
+  | {
       kind: "unpublish";
       slug: string;
       surface: "api";
@@ -131,6 +136,15 @@ export function routeForPath(pathname: string): Route {
     return {
       kind: "unpublish",
       slug: unpublishMatch[1],
+      surface: "api",
+    };
+  }
+
+  const htmlPreviewMatch = pathname.match(/^\/v1\/html-previews\/([A-Za-z0-9_-]+)$/);
+  if (htmlPreviewMatch) {
+    return {
+      kind: "htmlPreview",
+      slug: htmlPreviewMatch[1],
       surface: "api",
     };
   }

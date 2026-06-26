@@ -10,7 +10,7 @@ This repo turns AI-generated HTML artifacts into shareable pages without treatin
 | --- | --- | --- |
 | Preview | `html` | Viewer password gate and sandboxed HTML serving |
 | API | `admin` | Publish routes and Glean-authenticated self-service admin UI |
-| MCP | `html-mcp` | OAuth-backed MCP endpoint exposing `publish_html_preview` |
+| MCP | `html-mcp` | OAuth-backed MCP endpoint exposing HTML deployment and management tools |
 
 Keep those surfaces separate. The preview Worker renders hostile HTML. The API and MCP Workers make trusted publish, admin, OAuth, and ownership decisions.
 
@@ -25,25 +25,28 @@ Before connecting clients, deploy the MCP Worker and make sure `${MCP_BASE_URL}/
 - OAuth authorization metadata at `${MCP_BASE_URL}/.well-known/oauth-authorization-server`
 - OAuth protected-resource metadata at `${MCP_BASE_URL}/.well-known/oauth-protected-resource`
 - the MCP endpoint at `${MCP_BASE_URL}/mcp`
-- the `publish_html_preview` tool after MCP tool discovery
+- the `deploy_html`, `update_html`, `update_html_password`, and `delete_html` tools after MCP tool discovery
 
 The default MCP scope is `mcp:tools`.
 
-`publish_html_preview` accepts optional image attachments. Reference them from the HTML as `cid:name`, then send
+`deploy_html` requires `slug`, `title`, `html`, and `password`. If the user does not provide a slug, agents should
+derive a readable lower-kebab-case slug from the title or artifact purpose. The slug must be 3-80 lowercase letters,
+numbers, and single hyphens, with no leading or trailing hyphen. The Worker uses that exact slug or rejects the publish
+with `409 slug_taken`; it never auto-suffixes, suggests alternatives, or overwrites an existing preview.
+
+`deploy_html` and `update_html` accept optional image attachments. Reference them from the HTML as `cid:name`, then send
 matching `images[]` entries with `name`, `mimeType`, and `dataBase64`. The API Worker stores those bytes in private
 R2 objects and rewrites the HTML to password-gated preview asset URLs.
 
-`publish_html_preview` also accepts an optional `slug`. Omit it to get the existing random preview URL. If you send
-one, it must be 3-80 lowercase letters, numbers, and single hyphens, with no leading or trailing hyphen. The Worker
-uses that exact slug or rejects the publish with `409 slug_taken`; it never auto-suffixes, suggests alternatives, or
-overwrites an existing preview. Soft-deleted and expired previews still reserve their slugs until hard delete removes
-the D1 row.
+`update_html` replaces the HTML and complete image attachment set for an existing slug while preserving the preview URL
+and viewer password. `update_html_password` rotates the viewer password intentionally and invalidates existing viewer
+cookies. `delete_html` hard-deletes the preview and frees the slug for reuse.
 
-Scripts are blocked by default. Set `allowScripts: true` only for interactive previews that need local JavaScript.
-Interactive previews may load common Glean-generated artifact assets from `cdn.jsdelivr.net`, `unpkg.com`,
-`cdnjs.cloudflare.com`, `esm.sh`, `cdn.tailwindcss.com`, `cdn.plot.ly`, `d3js.org`, `cdn.sheetjs.com`,
-`ajax.googleapis.com`, `fonts.googleapis.com`, and `fonts.gstatic.com`. The Worker still serves them without
-`allow-same-origin`, runtime `connect-src` network access, forms, frames, or workers.
+Scripts always run inside the preview sandbox. The Worker allows a narrow Glean-generated HTML CDN set for common
+runtime libraries and presentation assets: `cdn.jsdelivr.net`, `unpkg.com`, `cdnjs.cloudflare.com`, `esm.sh`,
+`cdn.tailwindcss.com`, `cdn.plot.ly`, `d3js.org`, `cdn.sheetjs.com`, `ajax.googleapis.com`,
+`fonts.googleapis.com`, and `fonts.gstatic.com`. The preview still runs without `allow-same-origin`, runtime
+`connect-src` network access, forms, frames, workers, or top navigation.
 
 ### Glean
 
@@ -61,7 +64,7 @@ In Glean Admin Console:
 8. Set the token URL to `${MCP_BASE_URL}/oauth/token`.
 9. Set scopes to `mcp:tools`.
 10. Copy the Glean callback URL shown in the UI into `MCP_OAUTH_ALLOWED_REDIRECT_URIS`.
-11. Fetch tools and confirm Glean discovers **Publish Html Preview**.
+11. Fetch tools and confirm Glean discovers the HTML deployment and management tools.
 12. Enable chat visibility only for the users or groups that should publish hosted HTML previews.
 
 Glean should only receive the MCP OAuth client id and client secret. It should not know `PUBLISH_API_TOKEN`, `PUBLISH_INTERNAL_SERVICE_TOKEN`, `MCP_OAUTH_TOKEN_SECRET`, `COOKIE_SIGNING_SECRET`, or `PASSWORD_PEPPER`.
@@ -147,4 +150,4 @@ Add a remote server to `.cursor/mcp.json` or `~/.cursor/mcp.json`:
 }
 ```
 
-Then open Cursor settings for MCP, authenticate the server, and confirm `publish_html_preview` appears under available tools.
+Then open Cursor settings for MCP, authenticate the server, and confirm the HTML deployment and management tools appear.

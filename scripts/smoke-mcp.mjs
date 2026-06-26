@@ -108,7 +108,10 @@ async function checkToolsList(baseUrl, accessToken) {
     method: "tools/list",
   });
   const tools = result.result?.tools ?? [];
-  expect(tools.some((tool) => tool.name === "publish_html_preview"), "tools/list exposes publish_html_preview");
+  const names = new Set(tools.map((tool) => tool.name));
+  for (const name of ["deploy_html", "update_html", "update_html_password", "delete_html"]) {
+    expect(names.has(name), `tools/list exposes ${name}`);
+  }
   console.log("MCP tools/list check passed.");
 }
 

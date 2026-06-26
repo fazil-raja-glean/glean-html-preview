@@ -1,6 +1,6 @@
 import type { AuditEventRow } from "./audit";
 import type { PreviewAssetRow } from "./preview-assets";
-import type { PreviewRow, PreviewSettingsRow } from "./preview-store";
+import type { PreviewRow } from "./preview-store";
 
 export const testOrigins = {
   apiBaseUrl: "https://api.example.test",
@@ -65,7 +65,6 @@ export function createTestPreviewDb(seedPreviews: PreviewRow[] = [], seedAssets:
   const oauthGrants = new Map<string, TestOAuthGrantRow>();
   const adminOAuthClients = new Map<string, TestAdminOAuthClientRow>();
   const previews = new Map(seedPreviews.map((preview) => [preview.slug, { ...preview }]));
-  const previewSettings = new Map<string, PreviewSettingsRow>();
   const assets = new Map(seedAssets.map((asset) => [assetKey(asset.slug, asset.asset_id), { ...asset }]));
   const auditEvents: AuditEventRow[] = [];
 
@@ -126,20 +125,6 @@ export function createTestPreviewDb(seedPreviews: PreviewRow[] = [], seedAssets:
               created_at: String(createdAt),
               expires_at: typeof expiresAt === "string" ? expiresAt : "",
               deleted_at: null,
-            });
-            return d1Result<T>(1);
-          }
-
-          if (normalizedQuery.startsWith("INSERT INTO PREVIEW_SETTINGS")) {
-            const [slug, allowScripts, createdAt] = statement.values;
-            const slugText = String(slug);
-            if (previewSettings.has(slugText)) {
-              throw new Error("D1_ERROR: UNIQUE constraint failed: preview_settings.slug");
-            }
-            previewSettings.set(slugText, {
-              slug: slugText,
-              allow_scripts: Number(allowScripts),
-              created_at: String(createdAt),
             });
             return d1Result<T>(1);
           }
@@ -214,6 +199,20 @@ export function createTestPreviewDb(seedPreviews: PreviewRow[] = [], seedAssets:
             return d1Result<T>(1);
           }
 
+          if (normalizedQuery.startsWith("UPDATE PREVIEWS SET OBJECT_KEY")) {
+            const [objectKey, title, sourceUrl, expiresAt, slug, publisherEmail] = statement.values;
+            const preview = previews.get(String(slug));
+            if (!preview || preview.deleted_at || preview.publisher_email.toLowerCase() !== String(publisherEmail)) {
+              return d1Result<T>(0);
+            }
+
+            preview.object_key = String(objectKey);
+            preview.title = String(title);
+            preview.source_url = typeof sourceUrl === "string" ? sourceUrl : null;
+            preview.expires_at = typeof expiresAt === "string" ? expiresAt : "";
+            return d1Result<T>(1);
+          }
+
           if (normalizedQuery.startsWith("UPDATE PREVIEWS SET DELETED_AT")) {
             const [deletedAt, slug] = statement.values;
             const preview = previews.get(String(slug));
@@ -228,7 +227,6 @@ export function createTestPreviewDb(seedPreviews: PreviewRow[] = [], seedAssets:
           if (normalizedQuery.startsWith("DELETE FROM PREVIEWS")) {
             const slug = String(statement.values[0]);
             const deleted = previews.delete(slug);
-            previewSettings.delete(slug);
             for (const key of assets.keys()) {
               if (key.startsWith(`${slug}:`)) {
                 assets.delete(key);
@@ -305,10 +303,6 @@ export function createTestPreviewDb(seedPreviews: PreviewRow[] = [], seedAssets:
 
           if (normalizedQuery.startsWith("SELECT * FROM PREVIEWS WHERE SLUG")) {
             return (previews.get(String(statement.values[0])) as T | undefined) ?? null;
-          }
-
-          if (normalizedQuery.startsWith("SELECT * FROM PREVIEW_SETTINGS WHERE SLUG")) {
-            return (previewSettings.get(String(statement.values[0])) as T | undefined) ?? null;
           }
 
           if (normalizedQuery.startsWith("SELECT * FROM PREVIEW_ASSETS WHERE SLUG = ? AND ASSET_ID")) {

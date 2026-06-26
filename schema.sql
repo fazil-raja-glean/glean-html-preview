@@ -19,13 +19,6 @@ CREATE INDEX IF NOT EXISTS previews_publisher_email_idx
 CREATE INDEX IF NOT EXISTS previews_expires_at_idx
   ON previews (expires_at);
 
-CREATE TABLE IF NOT EXISTS preview_settings (
-  slug TEXT PRIMARY KEY,
-  allow_scripts INTEGER NOT NULL DEFAULT 0 CHECK (allow_scripts IN (0, 1)),
-  created_at TEXT NOT NULL,
-  FOREIGN KEY (slug) REFERENCES previews(slug) ON DELETE CASCADE
-);
-
 CREATE TABLE IF NOT EXISTS preview_assets (
   slug TEXT NOT NULL,
   asset_id TEXT NOT NULL,

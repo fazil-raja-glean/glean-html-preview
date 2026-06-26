@@ -320,8 +320,8 @@
     const slug = form.elements.slug.value.trim();
     const html = els.htmlInput.value;
 
-    if (!title || !password || !html.trim()) {
-      showError(els.uploadError, "Title, password, and HTML are all required.");
+    if (!title || !slug || !password || !html.trim()) {
+      showError(els.uploadError, "Title, slug, password, and HTML are all required.");
       return;
     }
 
@@ -330,12 +330,10 @@
       const payload = {
         csrf: csrf,
         title: title,
+        slug: slug,
         password: password,
         html: html,
       };
-      if (slug) {
-        payload.slug = slug;
-      }
 
       const response = await postJson("/api/previews", payload);
       const body = await readJson(response);

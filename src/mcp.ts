@@ -31,11 +31,14 @@ interface ToolResult {
   isError?: boolean;
 }
 
-type PublishToolArguments = Record<string, unknown>;
+type ToolArguments = Record<string, unknown>;
 
 const JSON_RPC_VERSION = "2.0";
 const MCP_PROTOCOL_VERSION = "2025-03-26";
-const PUBLISH_TOOL_NAME = "publish_html_preview";
+const DEPLOY_TOOL_NAME = "deploy_html";
+const UPDATE_TOOL_NAME = "update_html";
+const UPDATE_PASSWORD_TOOL_NAME = "update_html_password";
+const DELETE_TOOL_NAME = "delete_html";
 export const INTERNAL_PUBLISH_ACTOR_EMAIL_HEADER = "X-Publish-Actor-Email";
 export const INTERNAL_PUBLISH_SERVICE_TOKEN_HEADER = "X-Publish-Internal-Service-Token";
 
@@ -103,7 +106,7 @@ async function handleJsonRpcMessage(
       case "ping":
         return jsonRpcResult(responseId, {});
       case "tools/list":
-        return jsonRpcResult(responseId, { tools: [publishHtmlPreviewTool()] });
+        return jsonRpcResult(responseId, { tools: mcpTools() });
       case "tools/call":
         return await handleToolsCall(responseId, request.params, env, accessContext);
       default:
@@ -143,15 +146,27 @@ function initializeResult(): Record<string, unknown> {
   };
 }
 
-function publishHtmlPreviewTool(): Record<string, unknown> {
+function mcpTools(): Record<string, unknown>[] {
+  return [
+    deployHtmlTool(),
+    updateHtmlTool(),
+    updateHtmlPasswordTool(),
+    deleteHtmlTool(),
+  ];
+}
+
+function deployHtmlTool(): Record<string, unknown> {
   return {
-    name: PUBLISH_TOOL_NAME,
+    name: DEPLOY_TOOL_NAME,
     description:
-      "Publish a complete HTML document as a password-protected, sandboxed preview and return a shareable URL.",
+      "Deploy a complete HTML document as a password-protected, sandboxed preview URL. A slug is required. If the user did not provide one, derive a readable lower-kebab-case slug from the title or artifact purpose.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
       properties: {
+        slug: slugSchema(
+          "Required stable URL slug. Derive a short descriptive lower-kebab-case slug from the title or artifact purpose when the user does not provide one.",
+        ),
         title: {
           type: "string",
           minLength: 1,
@@ -163,61 +178,137 @@ function publishHtmlPreviewTool(): Record<string, unknown> {
           description:
             "Complete HTML document, including an html element. Use cid:image-name.png references for images supplied through images[].",
         },
-        slug: {
-          type: "string",
-          minLength: CUSTOM_SLUG_MIN_LENGTH,
-          maxLength: CUSTOM_SLUG_MAX_LENGTH,
-          pattern: CUSTOM_SLUG_PATTERN_SOURCE,
-          description:
-            "Optional custom URL slug. If supplied, it must be available and is used exactly; conflicts return slug_taken.",
-        },
-        images: {
-          type: "array",
-          description: "Optional image attachments referenced from the HTML as cid:name.",
-          items: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              name: {
-                type: "string",
-                description: "Unique cid name, for example proof.png.",
-              },
-              mimeType: {
-                type: "string",
-                enum: ["image/png", "image/jpeg", "image/webp", "image/gif", "image/avif"],
-              },
-              dataBase64: {
-                type: "string",
-                description: "Base64 image bytes. Data URLs are accepted.",
-              },
-            },
-            required: ["name", "mimeType", "dataBase64"],
-          },
-        },
-        allowScripts: {
-          type: "boolean",
-          description:
-            "Opt in to local JavaScript execution. Scripts run in a sandbox without allow-same-origin, network access, forms, frames, or workers.",
-        },
+        images: imagesSchema(),
         password: {
           type: "string",
           minLength: 5,
           maxLength: 256,
           description: "Viewer password for the preview.",
         },
-        expiresAt: {
+        expiresAt: expiresAtSchema(false),
+        sourceUrl: sourceUrlSchema(false),
+      },
+      required: ["slug", "title", "html", "password"],
+    },
+  };
+}
+
+function updateHtmlTool(): Record<string, unknown> {
+  return {
+    name: UPDATE_TOOL_NAME,
+    description:
+      "Update the HTML and image attachments for an existing preview slug while preserving the same URL and viewer password.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        slug: slugSchema("Existing preview slug to update."),
+        html: {
           type: "string",
-          format: "date-time",
-          description: "Optional ISO timestamp when the preview should expire.",
+          description:
+            "Replacement complete HTML document, including an html element. The images array is a full replacement set.",
         },
-        sourceUrl: {
+        title: {
           type: "string",
-          format: "uri",
-          description: "Optional URL for the source artifact or conversation.",
+          minLength: 1,
+          maxLength: 160,
+          description: "Optional replacement preview title.",
+        },
+        images: imagesSchema(),
+        expiresAt: expiresAtSchema(true),
+        sourceUrl: sourceUrlSchema(true),
+      },
+      required: ["slug", "html"],
+    },
+  };
+}
+
+function updateHtmlPasswordTool(): Record<string, unknown> {
+  return {
+    name: UPDATE_PASSWORD_TOOL_NAME,
+    description:
+      "Rotate the viewer password for an existing HTML preview. The preview URL and HTML content do not change.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        slug: slugSchema("Existing preview slug whose viewer password should rotate."),
+        password: {
+          type: "string",
+          minLength: 5,
+          maxLength: 256,
+          description: "New viewer password.",
         },
       },
-      required: ["title", "html", "password"],
+      required: ["slug", "password"],
     },
+  };
+}
+
+function deleteHtmlTool(): Record<string, unknown> {
+  return {
+    name: DELETE_TOOL_NAME,
+    description: "Delete an existing HTML preview owned by the signed-in user and free its slug for reuse.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        slug: slugSchema("Existing preview slug to delete."),
+      },
+      required: ["slug"],
+    },
+  };
+}
+
+function slugSchema(description: string): Record<string, unknown> {
+  return {
+    type: "string",
+    minLength: CUSTOM_SLUG_MIN_LENGTH,
+    maxLength: CUSTOM_SLUG_MAX_LENGTH,
+    pattern: CUSTOM_SLUG_PATTERN_SOURCE,
+    description,
+  };
+}
+
+function imagesSchema(): Record<string, unknown> {
+  return {
+    type: "array",
+    description: "Optional image attachments referenced from the HTML as cid:name.",
+    items: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        name: {
+          type: "string",
+          description: "Unique cid name, for example proof.png.",
+        },
+        mimeType: {
+          type: "string",
+          enum: ["image/png", "image/jpeg", "image/webp", "image/gif", "image/avif"],
+        },
+        dataBase64: {
+          type: "string",
+          description: "Base64 image bytes. Data URLs are accepted.",
+        },
+      },
+      required: ["name", "mimeType", "dataBase64"],
+    },
+  };
+}
+
+function expiresAtSchema(nullable: boolean): Record<string, unknown> {
+  return {
+    type: nullable ? ["string", "null"] : "string",
+    format: "date-time",
+    description: "Optional ISO timestamp when the preview should expire.",
+  };
+}
+
+function sourceUrlSchema(nullable: boolean): Record<string, unknown> {
+  return {
+    type: nullable ? ["string", "null"] : "string",
+    format: "uri",
+    description: "Optional URL for the source artifact or conversation.",
   };
 }
 
@@ -228,12 +319,20 @@ async function handleToolsCall(
   accessContext: McpOAuthAccessContext,
 ): Promise<Record<string, unknown>> {
   const call = parseToolCall(params);
-  if (call.name !== PUBLISH_TOOL_NAME) {
-    return jsonRpcError(id, -32602, `Unknown tool: ${call.name}`);
-  }
+  const args = parseToolArguments(call.arguments);
 
-  const args = parsePublishToolArguments(call.arguments);
-  return jsonRpcResult(id, await publishHtmlPreview(args, env, accessContext));
+  switch (call.name) {
+    case DEPLOY_TOOL_NAME:
+      return jsonRpcResult(id, await deployHtml(args, env, accessContext));
+    case UPDATE_TOOL_NAME:
+      return jsonRpcResult(id, await updateHtml(args, env, accessContext));
+    case UPDATE_PASSWORD_TOOL_NAME:
+      return jsonRpcResult(id, await updateHtmlPassword(args, env, accessContext));
+    case DELETE_TOOL_NAME:
+      return jsonRpcResult(id, await deleteHtml(args, env, accessContext));
+    default:
+      return jsonRpcError(id, -32602, `Unknown tool: ${call.name}`);
+  }
 }
 
 function parseToolCall(params: unknown): { name: string; arguments: unknown } {
@@ -247,7 +346,7 @@ function parseToolCall(params: unknown): { name: string; arguments: unknown } {
   };
 }
 
-function parsePublishToolArguments(value: unknown): PublishToolArguments {
+function parseToolArguments(value: unknown): ToolArguments {
   if (!isRecord(value)) {
     throw new HttpError(400, "invalid_tool_arguments", "Tool arguments must be an object");
   }
@@ -255,20 +354,86 @@ function parsePublishToolArguments(value: unknown): PublishToolArguments {
   return value;
 }
 
-async function publishHtmlPreview(
-  args: PublishToolArguments,
+async function deployHtml(
+  args: ToolArguments,
   env: McpEnv,
   accessContext: McpOAuthAccessContext,
 ): Promise<ToolResult> {
-  if (!accessContext.actorEmail) {
-    throw new HttpError(401, "missing_mcp_actor", "OAuth token is not bound to an authenticated Glean user");
-  }
-
-  const apiUrl = publishApiUrl(env);
-  const request = new Request(apiUrl, {
+  return callPreviewApi(env, accessContext, {
+    actionLabel: "Deploy",
+    body: args,
     method: "POST",
-    headers: publishApiHeaders(env, accessContext),
-    body: JSON.stringify(args),
+    path: "/v1/html-previews",
+    successLabel: "Deployed HTML preview",
+    successStatus: "active",
+  });
+}
+
+async function updateHtml(
+  args: ToolArguments,
+  env: McpEnv,
+  accessContext: McpOAuthAccessContext,
+): Promise<ToolResult> {
+  const { slug, body } = slugPathBody(args);
+  return callPreviewApi(env, accessContext, {
+    actionLabel: "Update",
+    body,
+    method: "PUT",
+    path: `/v1/html-previews/${encodeURIComponent(slug)}`,
+    successLabel: "Updated HTML preview",
+    successStatus: "active",
+  });
+}
+
+async function updateHtmlPassword(
+  args: ToolArguments,
+  env: McpEnv,
+  accessContext: McpOAuthAccessContext,
+): Promise<ToolResult> {
+  const { slug, body } = slugPathBody(args);
+  return callPreviewApi(env, accessContext, {
+    actionLabel: "Password update",
+    body,
+    method: "POST",
+    path: `/v1/html-previews/${encodeURIComponent(slug)}/password`,
+    successLabel: "Updated HTML preview password",
+    successStatus: "active",
+  });
+}
+
+async function deleteHtml(
+  args: ToolArguments,
+  env: McpEnv,
+  accessContext: McpOAuthAccessContext,
+): Promise<ToolResult> {
+  const slug = requireToolString(args.slug, "slug");
+  return callPreviewApi(env, accessContext, {
+    actionLabel: "Delete",
+    body: null,
+    method: "DELETE",
+    path: `/v1/html-previews/${encodeURIComponent(slug)}`,
+    successLabel: "Deleted HTML preview",
+    successStatus: "deleted",
+  });
+}
+
+async function callPreviewApi(
+  env: McpEnv,
+  accessContext: McpOAuthAccessContext,
+  input: {
+    actionLabel: string;
+    body: Record<string, unknown> | null;
+    method: string;
+    path: string;
+    successLabel: string;
+    successStatus: string;
+  },
+): Promise<ToolResult> {
+  const actorEmail = requireMcpActorEmail(accessContext);
+  const request = new Request(publishApiUrl(env, input.path), {
+    method: input.method,
+    headers: publishApiHeaders(env, actorEmail),
+    ...(input.body === null ? {} : { body: JSON.stringify(input.body) }),
   });
   const publishApi = requirePublishApiBinding(env);
   const response = await publishApi.fetch(request);
@@ -276,50 +441,52 @@ async function publishHtmlPreview(
 
   if (!response.ok) {
     const error = upstreamError(body);
-    return {
-      isError: true,
-      content: [
-        {
-          type: "text",
-          text: `Publish failed: ${error.message}`,
-        },
-      ],
-      structuredContent: {
-        status: response.status,
-        error: error.code,
-      },
-    };
+    return toolError(`${input.actionLabel} failed`, response.status, error.code, error.message);
   }
 
-  const result = parsePublishApiResult(body);
-  return {
-    content: [
-      {
-        type: "text",
-        text: `Published HTML preview: ${result.url}`,
-      },
-    ],
-    structuredContent: result,
-  };
+  return toolSuccess(input.successLabel, parsePreviewApiResult(body, input.successStatus));
 }
 
-function publishApiUrl(env: McpEnv): string {
+function publishApiUrl(env: McpEnv, path: string): string {
   const base = configuredUrl(env.API_BASE_URL, "API_BASE_URL");
-  return new URL("/v1/html-previews", base).toString();
+  return new URL(path, base).toString();
 }
 
-function publishApiHeaders(env: McpEnv, accessContext: McpOAuthAccessContext): Headers {
+function publishApiHeaders(env: McpEnv, actorEmail: string): Headers {
   const publishToken = requireConfiguredSecret(env.PUBLISH_API_TOKEN, "PUBLISH_API_TOKEN");
   const headers = new Headers({
     Authorization: `Bearer ${publishToken}`,
     "Content-Type": "application/json",
   });
-  headers.set(INTERNAL_PUBLISH_ACTOR_EMAIL_HEADER, accessContext.actorEmail ?? "");
+  headers.set(INTERNAL_PUBLISH_ACTOR_EMAIL_HEADER, actorEmail);
   headers.set(
     INTERNAL_PUBLISH_SERVICE_TOKEN_HEADER,
     requireConfiguredSecret(env.PUBLISH_INTERNAL_SERVICE_TOKEN, "PUBLISH_INTERNAL_SERVICE_TOKEN"),
   );
   return headers;
+}
+
+function slugPathBody(args: ToolArguments): { body: Record<string, unknown>; slug: string } {
+  const slug = requireToolString(args.slug, "slug");
+  const body = { ...args };
+  delete body.slug;
+  return { slug, body };
+}
+
+function requireToolString(value: unknown, field: string): string {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new HttpError(400, "invalid_tool_arguments", `${field} must be a string`);
+  }
+
+  return value;
+}
+
+function requireMcpActorEmail(accessContext: McpOAuthAccessContext): string {
+  if (!accessContext.actorEmail) {
+    throw new HttpError(401, "missing_mcp_actor", "OAuth token is not bound to an authenticated Glean user");
+  }
+
+  return accessContext.actorEmail;
 }
 
 function requirePublishApiBinding(env: McpEnv): Fetcher {
@@ -338,31 +505,64 @@ async function readJsonResponse(response: Response): Promise<unknown> {
   }
 }
 
-function parsePublishApiResult(value: unknown): Record<string, unknown> {
-  if (!isRecord(value) || typeof value.url !== "string" || typeof value.slug !== "string") {
-    return {
-      status: "published",
-    };
+function parsePreviewApiResult(value: unknown, fallbackStatus: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    return { status: fallbackStatus };
   }
 
   return {
-    url: value.url,
-    slug: value.slug,
-    expiresAt: typeof value.expiresAt === "string" ? value.expiresAt : null,
-    status: typeof value.status === "string" ? value.status : "active",
+    ...(typeof value.url === "string" ? { url: value.url } : {}),
+    ...(typeof value.slug === "string" ? { slug: value.slug } : {}),
+    ...(value.expiresAt === null || typeof value.expiresAt === "string" ? { expiresAt: value.expiresAt } : {}),
+    status: typeof value.status === "string" ? value.status : fallbackStatus,
+  };
+}
+
+function toolSuccess(label: string, structuredContent: Record<string, unknown>): ToolResult {
+  const target =
+    typeof structuredContent.url === "string"
+      ? structuredContent.url
+      : typeof structuredContent.slug === "string"
+        ? structuredContent.slug
+        : null;
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: target ? `${label}: ${target}` : label,
+      },
+    ],
+    structuredContent,
+  };
+}
+
+function toolError(label: string, status: number, code: string, message: string): ToolResult {
+  return {
+    isError: true,
+    content: [
+      {
+        type: "text",
+        text: `${label}: ${message}`,
+      },
+    ],
+    structuredContent: {
+      status,
+      error: code,
+    },
   };
 }
 
 function upstreamError(value: unknown): { code: string; message: string } {
   if (isRecord(value) && isRecord(value.error)) {
     return {
-      code: typeof value.error.code === "string" ? value.error.code : "publish_failed",
+      code: typeof value.error.code === "string" ? value.error.code : "preview_api_failed",
       message: typeof value.error.message === "string" ? value.error.message : "Preview API rejected the request",
     };
   }
 
   return {
-    code: "publish_failed",
+    code: "preview_api_failed",
     message: "Preview API rejected the request",
   };
 }

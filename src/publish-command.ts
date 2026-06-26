@@ -3,26 +3,32 @@ import { parsePreviewImages, type PreviewAssetLimitsEnv, type PreviewImageInput 
 import type { PublishPrincipal } from "./publish-principal";
 
 export interface PublishCommand {
-  allowScripts: boolean;
   expiresAt: string | null;
   html: string;
   images: PreviewImageInput[];
   password: string;
   publisherEmail: string;
-  slug: string | null;
+  slug: string;
   sourceUrl: string | null;
   title: string;
 }
 
 export interface PreviewPublishInput {
-  allowScripts: boolean;
   expiresAt: string | null;
   html: string;
   images: PreviewImageInput[];
   password: string;
-  slug: string | null;
+  slug: string;
   sourceUrl: string | null;
   title: string;
+}
+
+export interface PreviewHtmlUpdateInput {
+  expiresAt?: string | null;
+  html: string;
+  images: PreviewImageInput[];
+  sourceUrl?: string | null;
+  title?: string;
 }
 
 export interface RotatePasswordCommand {
@@ -57,40 +63,59 @@ export function parsePublishCommand(
 }
 
 export function parsePreviewPublishInput(body: Record<string, unknown>, env: PublishCommandEnv): PreviewPublishInput {
+  rejectRemovedField(body, "allowScripts");
   const title = requireString(body.title, "title").trim();
   const html = requireString(body.html, "html");
   const password = requireString(body.password, "password");
   const expiresAt = parseExpiresAt(body.expiresAt);
   const sourceUrl = parseOptionalUrl(body.sourceUrl, "sourceUrl");
-  const slug = parseOptionalSlug(body.slug);
+  const slug = parseRequiredSlug(body.slug);
   const images = parsePreviewImages(body.images, env);
-  const allowScripts = parseOptionalBoolean(body.allowScripts, "allowScripts");
   const maxHtmlBytes = parsePositiveInteger(env.MAX_HTML_BYTES, DEFAULT_MAX_HTML_BYTES);
 
-  if (title.length < 1 || title.length > 160) {
-    throw new HttpError(400, "invalid_title", "Title must be between 1 and 160 characters");
-  }
-
-  if (!looksLikeHtmlDocument(html)) {
-    throw new HttpError(400, "invalid_html", "HTML must be a complete document with an html element");
-  }
-
-  if (new TextEncoder().encode(html).byteLength > maxHtmlBytes) {
-    throw new HttpError(413, "html_too_large", `HTML must be ${maxHtmlBytes} bytes or smaller`);
-  }
-
+  validateTitle(title);
+  validateHtml(html, maxHtmlBytes);
   validatePassword(password);
 
   return {
     title,
     html,
     images,
-    allowScripts,
     password,
     slug,
     expiresAt,
     sourceUrl,
   };
+}
+
+export function parsePreviewHtmlUpdateInput(
+  body: Record<string, unknown>,
+  env: PublishCommandEnv,
+): PreviewHtmlUpdateInput {
+  rejectRemovedField(body, "allowScripts");
+  rejectRemovedField(body, "password");
+  const html = requireString(body.html, "html");
+  const images = parsePreviewImages(body.images, env);
+  const maxHtmlBytes = parsePositiveInteger(env.MAX_HTML_BYTES, DEFAULT_MAX_HTML_BYTES);
+  const input: PreviewHtmlUpdateInput = { html, images };
+
+  validateHtml(html, maxHtmlBytes);
+
+  if (hasOwn(body, "title")) {
+    const title = requireString(body.title, "title").trim();
+    validateTitle(title);
+    input.title = title;
+  }
+
+  if (hasOwn(body, "expiresAt")) {
+    input.expiresAt = parseExpiresAt(body.expiresAt);
+  }
+
+  if (hasOwn(body, "sourceUrl")) {
+    input.sourceUrl = parseOptionalUrl(body.sourceUrl, "sourceUrl");
+  }
+
+  return input;
 }
 
 export function parseUnpublishCommand(body: Record<string, unknown>): UnpublishCommand {
@@ -106,18 +131,6 @@ export function parseRotatePasswordCommand(body: Record<string, unknown>): Rotat
   return {
     password,
   };
-}
-
-function parseOptionalBoolean(value: unknown, field: string): boolean {
-  if (value === undefined || value === null) {
-    return false;
-  }
-
-  if (typeof value !== "boolean") {
-    throw new HttpError(400, "invalid_request", `${field} must be a boolean`);
-  }
-
-  return value;
 }
 
 function requireString(value: unknown, field: string): string {
@@ -153,9 +166,9 @@ function parseOptionalUrl(value: unknown, field: string): string | null {
   }
 }
 
-function parseOptionalSlug(value: unknown): string | null {
-  if (value === undefined || value === null) {
-    return null;
+function parseRequiredSlug(value: unknown): string {
+  if (value === undefined || value === null || value === "") {
+    throw new HttpError(400, "missing_slug", "slug is required");
   }
 
   if (
@@ -202,8 +215,34 @@ function validatePassword(password: string): void {
   }
 }
 
+function validateTitle(title: string): void {
+  if (title.length < 1 || title.length > 160) {
+    throw new HttpError(400, "invalid_title", "Title must be between 1 and 160 characters");
+  }
+}
+
+function validateHtml(html: string, maxHtmlBytes: number): void {
+  if (!looksLikeHtmlDocument(html)) {
+    throw new HttpError(400, "invalid_html", "HTML must be a complete document with an html element");
+  }
+
+  if (new TextEncoder().encode(html).byteLength > maxHtmlBytes) {
+    throw new HttpError(413, "html_too_large", `HTML must be ${maxHtmlBytes} bytes or smaller`);
+  }
+}
+
 function looksLikeHtmlDocument(html: string): boolean {
   return /<html[\s>]/i.test(html);
+}
+
+function rejectRemovedField(body: Record<string, unknown>, field: string): void {
+  if (hasOwn(body, field)) {
+    throw new HttpError(400, "invalid_request", `${field} is not supported`);
+  }
+}
+
+function hasOwn(body: Record<string, unknown>, field: string): boolean {
+  return Object.prototype.hasOwnProperty.call(body, field);
 }
 
 function parsePositiveInteger(value: string | undefined, fallback: number): number {

@@ -19,7 +19,7 @@
       <section class="card" aria-labelledby="upload-heading">
         <h2 id="upload-heading">Upload a new page</h2>
         <p class="hint">
-          Give the page a title and a viewer password, then provide the HTML by choosing a file,
+          Give the page a title, slug, and viewer password, then provide the HTML by choosing a file,
           dropping it below, or pasting markup. Publishing returns a shareable link.
         </p>
 
@@ -41,7 +41,7 @@
               />
             </label>
             <label class="field">
-              <span class="field-label">Custom slug</span>
+              <span class="field-label">Slug</span>
               <input
                 name="slug"
                 type="text"
@@ -51,8 +51,10 @@
                 autocomplete="off"
                 autocapitalize="none"
                 spellcheck="false"
-                placeholder="hello-world-test"
+                placeholder="q3-pipeline-dashboard"
+                required
               />
+              <span class="field-hint">Use lower-kebab-case, for example q3-pipeline-dashboard.</span>
             </label>
           </div>
 

@@ -9,8 +9,6 @@ import { rewriteImageReferences, type PreviewAssetReference } from "./preview-as
 import { passwordForm } from "./preview-password-form";
 import {
   getActivePreview,
-  getPreviewRenderOptions,
-  type PreviewRenderOptions,
   type PreviewRow,
   type PreviewStoreEnv,
 } from "./preview-store";
@@ -19,10 +17,6 @@ import { signPreviewAssetToken, verifyPreviewAssetToken } from "./security";
 export interface PreviewRenderEnv extends PreviewStoreEnv, PreviewAssetStoreEnv, PreviewAccessEnv {
   PUBLIC_BASE_URL?: string;
 }
-
-const STATIC_PREVIEW_RENDER_OPTIONS: PreviewRenderOptions = {
-  allowScripts: false,
-};
 
 const HTML_SECURITY_HEADER_BASE = {
   "X-Content-Type-Options": "nosniff",
@@ -77,13 +71,12 @@ export async function handlePreviewRequest(
   }
 
   const html = await object.text();
-  const renderOptions = await getPreviewRenderOptions(env, preview.slug);
   const rewrittenHtml = rewriteImageReferences(
     html,
     preview.slug,
     await previewAssetReferences(env, preview),
   );
-  const headers = new Headers(previewHtmlSecurityHeaders(previewOrigin(request, env), renderOptions));
+  const headers = new Headers(previewHtmlSecurityHeaders(previewOrigin(request, env)));
   headers.set("Content-Type", "text/html; charset=utf-8");
   headers.set("Cache-Control", "private, no-store");
 
@@ -116,26 +109,19 @@ export async function handlePreviewAssetRequest(
 
 export function previewHtmlSecurityHeaders(
   previewOriginValue: string,
-  options: PreviewRenderOptions = STATIC_PREVIEW_RENDER_OPTIONS,
 ): Record<string, string> {
   return {
-    "Content-Security-Policy": previewContentSecurityPolicy(previewOriginValue, options),
+    "Content-Security-Policy": previewContentSecurityPolicy(previewOriginValue),
     ...HTML_SECURITY_HEADER_BASE,
   };
 }
 
-function previewContentSecurityPolicy(
-  previewOriginValue: string,
-  options: PreviewRenderOptions,
-): string {
-  const sandbox = options.allowScripts ? "sandbox allow-scripts" : "sandbox";
+function previewContentSecurityPolicy(previewOriginValue: string): string {
   const scriptSources = ["'unsafe-inline'", ...GLEAN_GENERATED_HTML_SCRIPT_SOURCES].join(" ");
-  const scriptSrc = options.allowScripts ? `script-src ${scriptSources}` : "script-src 'none'";
   const styleSources = ["'unsafe-inline'", ...GLEAN_GENERATED_HTML_STYLE_SOURCES].join(" ");
   const fontSources = ["data:", ...GLEAN_GENERATED_HTML_FONT_SOURCES].join(" ");
-  const navigateTo = options.allowScripts ? "; navigate-to 'none'" : "";
 
-  return `${sandbox}; default-src 'none'; ${scriptSrc}; script-src-attr 'none'; style-src ${styleSources}; img-src ${previewOriginValue} data: blob:; media-src data: blob:; font-src ${fontSources}; connect-src 'none'; form-action 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; frame-ancestors 'none'${navigateTo}`;
+  return `sandbox allow-scripts; default-src 'none'; script-src ${scriptSources}; script-src-attr 'none'; style-src ${styleSources}; img-src ${previewOriginValue} data: blob:; media-src data: blob:; font-src ${fontSources}; connect-src 'none'; form-action 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; frame-ancestors 'none'; navigate-to 'none'`;
 }
 
 function previewOrigin(request: Request, env: PreviewRenderEnv): string {

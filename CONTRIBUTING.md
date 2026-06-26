@@ -36,6 +36,7 @@ MCP_BASE_URL="https://html-mcp.your-workers-subdomain.workers.dev" npm run smoke
 ```
 
 Set `MCP_OAUTH_CLIENT_ID` and `MCP_OAUTH_CLIENT_SECRET` to include authenticated MCP initialize and tool discovery checks.
+Authenticated MCP discovery should include `deploy_html`, `update_html`, `update_html_password`, and `delete_html`.
 
 ## Rules
 

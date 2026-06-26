@@ -1,16 +1,15 @@
 import { HttpError } from "./http";
 import {
-  deletePreviewAssetRows,
-  deletePreviewObjects,
   previewAssetInsertStatements,
   putPreviewObjects,
 } from "./preview-asset-store";
 import {
   previewAssetUploads,
   type PreviewAssetUpload,
+  type PreviewAssetRow,
   type PreviewImageInput,
 } from "./preview-assets";
-import { createSlug, createStorageId, hashPassword, type PasswordHash } from "./security";
+import { createStorageId, hashPassword, type PasswordHash } from "./security";
 
 export interface PreviewStoreEnv {
   HTML_PREVIEWS: R2Bucket;
@@ -33,30 +32,27 @@ export interface PreviewRow {
   title: string;
 }
 
-export interface PreviewSettingsRow {
-  allow_scripts: number;
-  created_at: string;
-  slug: string;
-}
-
-export interface PreviewRenderOptions {
-  allowScripts: boolean;
-}
-
 export interface CreatePreviewInput {
-  allowScripts: boolean;
   expiresAt: string | null;
   html: string;
   images: PreviewImageInput[];
   password: string;
   publisherEmail: string;
-  slug: string | null;
+  slug: string;
   sourceUrl: string | null;
   title: string;
 }
 
+export interface UpdatePreviewHtmlInput {
+  expiresAt?: string | null;
+  html: string;
+  images: PreviewImageInput[];
+  sourceUrl?: string | null;
+  title?: string;
+}
+
 export async function createPreview(env: PreviewStoreEnv, input: CreatePreviewInput): Promise<PreviewRow> {
-  const slug = input.slug ?? createSlug();
+  const slug = input.slug;
   const storagePrefix = previewStoragePrefix(createStorageId());
   const objectKey = `${storagePrefix}/index.html`;
   const assets = previewAssetUploads({
@@ -87,7 +83,7 @@ export async function createPreview(env: PreviewStoreEnv, input: CreatePreviewIn
     });
   } catch (error) {
     await deletePreviewObjectKeys(env, objectKeys);
-    if (input.slug && isPreviewSlugConflict(error)) {
+    if (isPreviewSlugConflict(error)) {
       throw new HttpError(409, "slug_taken", "Slug is already in use");
     }
     throw error;
@@ -106,16 +102,6 @@ export async function createPreview(env: PreviewStoreEnv, input: CreatePreviewIn
     created_at: now,
     expires_at: previewExpiresAtStorageValue(input.expiresAt),
     deleted_at: null,
-  };
-}
-
-export async function getPreviewRenderOptions(env: PreviewStoreEnv, slug: string): Promise<PreviewRenderOptions> {
-  const settings = await env.PREVIEW_DB.prepare("SELECT * FROM preview_settings WHERE slug = ?")
-    .bind(slug)
-    .first<PreviewSettingsRow>();
-
-  return {
-    allowScripts: settings?.allow_scripts === 1,
   };
 }
 
@@ -176,6 +162,48 @@ export async function getPreviewForPublisher(
   return preview;
 }
 
+export async function updatePreviewHtml(
+  env: PreviewStoreEnv,
+  slug: string,
+  publisherEmail: string,
+  input: UpdatePreviewHtmlInput,
+): Promise<PreviewRow> {
+  const existing = await getPreviewForPublisher(env, slug, publisherEmail);
+  ensurePreviewCanUpdate(existing);
+
+  const oldAssets = await listPreviewAssetRows(env, slug);
+  const oldObjectKeys = [existing.object_key, ...oldAssets.map((asset) => asset.object_key)];
+  const storagePrefix = previewStoragePrefix(createStorageId());
+  const objectKey = `${storagePrefix}/index.html`;
+  const assets = previewAssetUploads({
+    slug,
+    storagePrefix,
+    images: input.images,
+  });
+  const now = new Date().toISOString();
+  const objectKeys = [objectKey, ...assets.map((asset) => asset.objectKey)];
+  const nextPreview = previewRowWithHtmlUpdate(existing, input, objectKey);
+
+  try {
+    await putPreviewObjects(env, {
+      slug,
+      title: nextPreview.title,
+      publisherEmail,
+      html: input.html,
+      objectKey,
+      assets,
+      createdAt: now,
+    });
+    await replacePreviewHtmlRows(env, slug, publisherEmail, nextPreview, assets, now);
+  } catch (error) {
+    await deletePreviewObjectKeys(env, objectKeys);
+    throw error;
+  }
+
+  await deletePreviewObjectKeys(env, oldObjectKeys);
+  return nextPreview;
+}
+
 export async function getActivePreview(env: PreviewStoreEnv, slug: string): Promise<PreviewRow> {
   const preview = await getPreview(env, slug);
 
@@ -217,9 +245,12 @@ export async function softDeletePreview(env: PreviewStoreEnv, slug: string, dele
 
 export async function hardDeletePreview(env: PreviewStoreEnv, slug: string): Promise<void> {
   const preview = await getPreview(env, slug);
-  await deletePreviewObjects(env, { slug: preview.slug, objectKey: preview.object_key });
-  await deletePreviewAssetRows(env, slug);
-  await env.PREVIEW_DB.prepare("DELETE FROM previews WHERE slug = ?").bind(slug).run();
+  const assets = await listPreviewAssetRows(env, slug);
+  await env.PREVIEW_DB.batch([
+    env.PREVIEW_DB.prepare("DELETE FROM preview_assets WHERE slug = ?").bind(slug),
+    env.PREVIEW_DB.prepare("DELETE FROM previews WHERE slug = ?").bind(slug),
+  ]);
+  await deletePreviewObjectKeys(env, [preview.object_key, ...assets.map((asset) => asset.object_key)]);
 }
 
 export async function readPreviewHtml(env: PreviewStoreEnv, slug: string): Promise<string> {
@@ -271,23 +302,121 @@ async function insertPreviewRows(
       values.createdAt,
       previewExpiresAtStorageValue(input.expiresAt),
     ),
-    env.PREVIEW_DB.prepare(
-      `INSERT INTO preview_settings (
-        slug,
-        allow_scripts,
-        created_at
-      ) VALUES (?, ?, ?)`,
-    ).bind(values.slug, input.allowScripts ? 1 : 0, values.createdAt),
     ...previewAssetInsertStatements(env, values.assets, values.createdAt),
   ];
 
   await env.PREVIEW_DB.batch(statements);
 }
 
+async function replacePreviewHtmlRows(
+  env: PreviewStoreEnv,
+  slug: string,
+  publisherEmail: string,
+  preview: PreviewRow,
+  assets: PreviewAssetUpload[],
+  updatedAt: string,
+): Promise<void> {
+  const ownerEmail = publisherEmail.trim().toLowerCase();
+  const results = await env.PREVIEW_DB.batch([
+    env.PREVIEW_DB.prepare(
+      `UPDATE previews
+        SET object_key = ?,
+            title = ?,
+            source_url = ?,
+            expires_at = ?
+        WHERE slug = ? AND lower(publisher_email) = ? AND deleted_at IS NULL`,
+    ).bind(
+      preview.object_key,
+      preview.title,
+      preview.source_url,
+      preview.expires_at,
+      slug,
+      ownerEmail,
+    ),
+    env.PREVIEW_DB.prepare(
+      `DELETE FROM preview_assets
+        WHERE slug = ?
+          AND EXISTS (
+            SELECT 1 FROM previews
+            WHERE slug = ? AND lower(publisher_email) = ? AND deleted_at IS NULL
+          )`,
+    ).bind(slug, slug, ownerEmail),
+    ...previewAssetReplacementStatements(env, assets, updatedAt, ownerEmail),
+  ]);
+
+  if (results[0]?.meta.changes !== 1) {
+    throw new HttpError(404, "preview_not_found", "Preview not found");
+  }
+}
+
+function previewAssetReplacementStatements(
+  env: PreviewStoreEnv,
+  assets: PreviewAssetUpload[],
+  createdAt: string,
+  ownerEmail: string,
+): D1PreparedStatement[] {
+  return assets.map((asset) =>
+    env.PREVIEW_DB.prepare(
+      `INSERT INTO preview_assets (
+        slug,
+        asset_id,
+        object_key,
+        content_type,
+        byte_size,
+        original_name,
+        created_at
+      )
+      SELECT ?, ?, ?, ?, ?, ?, ?
+      WHERE EXISTS (
+        SELECT 1 FROM previews
+        WHERE slug = ? AND lower(publisher_email) = ? AND deleted_at IS NULL
+      )`,
+    ).bind(
+      asset.slug,
+      asset.assetId,
+      asset.objectKey,
+      asset.contentType,
+      asset.byteSize,
+      asset.originalName,
+      createdAt,
+      asset.slug,
+      ownerEmail,
+    ),
+  );
+}
+
+function previewRowWithHtmlUpdate(
+  existing: PreviewRow,
+  input: UpdatePreviewHtmlInput,
+  objectKey: string,
+): PreviewRow {
+  return {
+    ...existing,
+    title: input.title ?? existing.title,
+    object_key: objectKey,
+    source_url: input.sourceUrl === undefined ? existing.source_url : input.sourceUrl,
+    expires_at: input.expiresAt === undefined ? existing.expires_at : previewExpiresAtStorageValue(input.expiresAt),
+  };
+}
+
 function ensurePreviewIsNotDeleted(preview: PreviewRow): void {
   if (preview.deleted_at) {
     throw new HttpError(410, "preview_unpublished", "Preview has been unpublished");
   }
+}
+
+function ensurePreviewCanUpdate(preview: PreviewRow): void {
+  ensurePreviewIsNotDeleted(preview);
+  if (isPreviewExpired(preview)) {
+    throw new HttpError(410, "preview_expired", "Preview has expired");
+  }
+}
+
+async function listPreviewAssetRows(env: PreviewStoreEnv, slug: string): Promise<PreviewAssetRow[]> {
+  const result = await env.PREVIEW_DB.prepare("SELECT * FROM preview_assets WHERE slug = ?")
+    .bind(slug)
+    .all<PreviewAssetRow>();
+  return result.results;
 }
 
 async function deletePreviewObjectKeys(env: PreviewStoreEnv, objectKeys: string[]): Promise<void> {

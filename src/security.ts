@@ -27,10 +27,6 @@ export interface PreviewAssetTokenPayload {
   slug: string;
 }
 
-export function createSlug(): string {
-  return randomBase64Url(16);
-}
-
 export function createStorageId(): string {
   return randomBase64Url(16);
 }

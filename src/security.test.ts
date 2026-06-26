@@ -79,24 +79,8 @@ describe("preview asset tokens", () => {
 });
 
 describe("preview HTML security headers", () => {
-  it("sandboxes uploaded HTML and blocks script execution by default", () => {
+  it("allows Glean-generated HTML asset CDNs inside a restrictive sandbox", () => {
     const csp = previewHtmlSecurityHeaders("https://preview.example.test")["Content-Security-Policy"];
-
-    expect(csp).toContain("sandbox");
-    expect(csp).toContain("script-src 'none'");
-    expect(csp).toContain("script-src-attr 'none'");
-    expect(csp).toContain("form-action 'none'");
-    expect(csp).toContain("object-src 'none'");
-    expect(csp).toContain("worker-src 'none'");
-    expect(csp).toContain("img-src https://preview.example.test data: blob:");
-    expect(csp).not.toContain("script-src 'unsafe-inline'");
-    expect(csp).not.toContain("img-src https: data:");
-  });
-
-  it("allows opt-in scripts without same-origin, network, forms, frames, or workers", () => {
-    const csp = previewHtmlSecurityHeaders("https://preview.example.test", {
-      allowScripts: true,
-    })["Content-Security-Policy"];
 
     expect(csp).toContain("sandbox allow-scripts");
     expect(csp).not.toContain("allow-same-origin");
@@ -116,8 +100,11 @@ describe("preview HTML security headers", () => {
     expect(csp).toContain("connect-src 'none'");
     expect(csp).toContain("form-action 'none'");
     expect(csp).toContain("frame-src 'none'");
+    expect(csp).toContain("object-src 'none'");
     expect(csp).toContain("worker-src 'none'");
     expect(csp).toContain("navigate-to 'none'");
+    expect(csp).toContain("img-src https://preview.example.test data: blob:");
+    expect(csp).not.toContain("img-src https: data:");
     expect(csp).not.toContain("script-src 'none'");
     expect(csp).not.toContain("connect-src https:");
     expect(csp).not.toContain("script-src https:");

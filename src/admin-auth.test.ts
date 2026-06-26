@@ -22,6 +22,7 @@ const apiWorkerEnv = {
 describe("publish/admin access gate", () => {
   it.each([
     "/v1/html-previews",
+    "/v1/html-previews/abc123",
     "/v1/html-previews/abc123/unpublish",
     "/v1/html-previews/abc123/password",
   ])("rejects %s before mutation when the second lock is missing", async (pathname) => {

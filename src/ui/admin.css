@@ -92,6 +92,14 @@ main {
   margin-bottom: 6px;
 }
 
+.field-hint {
+  color: var(--muted);
+  display: block;
+  font-size: 12px;
+  line-height: 1.35;
+  margin-top: 6px;
+}
+
 input,
 textarea {
   border: 1px solid #cbd2c8;

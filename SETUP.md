@@ -20,7 +20,7 @@ Do not collapse these roles for production. `WORKER_ROLE=combined` exists for lo
 
 - `src/index.ts` - Worker entrypoint and route dispatch.
 - `src/routes.ts` - route surface mapping for preview, API, admin, and MCP paths.
-- `src/mcp.ts` - MCP JSON-RPC handler and `publish_html_preview` tool.
+- `src/mcp.ts` - MCP JSON-RPC handler and HTML deployment/management tools.
 - `src/oauth.ts` - MCP OAuth metadata, authorization, token, and bearer validation.
 - `src/oauth-config.ts` - MCP OAuth clients, scopes, redirect allow-listing, and token TTLs.
 - `src/auth/glean-oauth.ts` - Glean OAuth identity flow for admin and MCP user login.
@@ -336,9 +336,10 @@ curl -sS "$MCP_BASE_URL/mcp" \
 Expected:
 
 - `initialize` returns `serverInfo.name = "html-sharing"`.
-- `tools/list` returns `publish_html_preview`.
+- `tools/list` returns `deploy_html`, `update_html`, `update_html_password`, and `delete_html`.
 
-Publishing requires a user-bound authorization-code token. `client_credentials` tokens can initialize and list tools, but publish calls should fail because they are not tied to a verified user email.
+Mutating tools require a user-bound authorization-code token. `client_credentials` tokens can initialize and list tools,
+but deploy, update, password rotation, and delete calls should fail because they are not tied to a verified user email.
 
 ## 12. Configure Glean Internally
 
@@ -356,8 +357,8 @@ In Glean Admin Console, create a purpose-built MCP server for this tool:
 10. Set token URL to `${MCP_BASE_URL}/oauth/token`.
 11. Set scopes to `mcp:tools`.
 12. Copy the callback URL from Glean into `MCP_OAUTH_ALLOWED_REDIRECT_URIS`.
-13. Fetch tools and confirm **Publish Html Preview** appears.
-14. Enable only the users or groups that should be able to publish hosted HTML.
+13. Fetch tools and confirm the HTML deployment and management tools appear.
+14. Enable only the users or groups that should be able to manage hosted HTML.
 
 Do not add this tool to a large default MCP server unless that is an explicit product choice. A purpose-built server keeps tool descriptions and access easier to reason about.
 
@@ -428,10 +429,11 @@ copyable `link:`/`password:` block (passwords are hashed, so this is only availa
 Editing the UI means editing `src/ui/admin.{html,css,js}` and re-running `npm run build:admin`
 (`check`, `test`, `dev`, and `deploy` run it automatically via pre-hooks).
 
-Publish requests can include an optional `slug`. Omit it to keep the generated random slug behavior. If supplied, it
-must be 3-80 lowercase letters, numbers, and single hyphens, with no leading or trailing hyphen. The Worker uses that
-exact slug or returns `409 slug_taken`; it does not suggest alternatives, auto-suffix, or overwrite existing previews.
-Soft-deleted and expired preview rows still reserve their slugs. Hard delete frees a slug because it removes the D1 row.
+Publish requests must include a `slug`. Agents should derive a readable lower-kebab-case slug from the title or artifact
+purpose when the user does not provide one. It must be 3-80 lowercase letters, numbers, and single hyphens, with no
+leading or trailing hyphen. The Worker uses that exact slug or returns `409 slug_taken`; it does not suggest
+alternatives, auto-suffix, or overwrite existing previews. Soft-deleted and expired preview rows still reserve their
+slugs. Hard delete frees a slug because it removes the D1 row.
 
 HTML can reference attached images with `cid:name` URLs. API and MCP callers pass those images in an `images`
 array with `name`, `mimeType`, and `dataBase64`; the API Worker stores new HTML and asset bytes under
@@ -440,12 +442,11 @@ viewer password cookie as the HTML page, so image bytes remain private R2 object
 default limits are `MAX_HTML_BYTES=10000000`, `MAX_IMAGES_PER_PREVIEW=25`, `MAX_IMAGE_BYTES=5000000`, and
 `MAX_TOTAL_IMAGE_BYTES=25000000`.
 
-Scripts are blocked by default. Set `allowScripts: true` only when a preview needs local interactivity. Interactive
-previews may load common Glean-generated artifact assets from `cdn.jsdelivr.net`, `unpkg.com`,
-`cdnjs.cloudflare.com`, `esm.sh`, `cdn.tailwindcss.com`, `cdn.plot.ly`, `d3js.org`, `cdn.sheetjs.com`,
-`ajax.googleapis.com`, `fonts.googleapis.com`, and `fonts.gstatic.com`, while still using `sandbox allow-scripts`
-without `allow-same-origin` and keeping `connect-src 'none'`, `form-action 'none'`, `frame-src 'none'`,
-`worker-src 'none'`, and `navigate-to 'none'`.
+Scripts always run inside `sandbox allow-scripts` without `allow-same-origin`. Preview HTML may load common
+Glean-generated artifact assets from `cdn.jsdelivr.net`, `unpkg.com`, `cdnjs.cloudflare.com`, `esm.sh`,
+`cdn.tailwindcss.com`, `cdn.plot.ly`, `d3js.org`, `cdn.sheetjs.com`, `ajax.googleapis.com`,
+`fonts.googleapis.com`, and `fonts.gstatic.com`, while still keeping `connect-src 'none'`, `form-action 'none'`,
+`frame-src 'none'`, `worker-src 'none'`, and `navigate-to 'none'`.
 
 Publish locally through the API route:
 
@@ -471,6 +472,7 @@ curl -i http://localhost:8787/v1/html-previews \
   -H "Content-Type: application/json" \
   --data '{
     "title": "Local image smoke test",
+    "slug": "local-image-smoke-test",
     "html": "<!doctype html><html><body><img alt=\"proof\" src=\"cid:proof.png\"></body></html>",
     "images": [
       {
@@ -492,10 +494,43 @@ curl -i http://localhost:8787/v1/html-previews \
   -H "Content-Type: application/json" \
   --data '{
     "title": "Local interactive smoke test",
+    "slug": "local-interactive-smoke-test",
     "html": "<!doctype html><html><body><button id=\"b\">0</button><script>b.onclick=()=>b.textContent=String(Number(b.textContent)+1)</script></body></html>",
-    "allowScripts": true,
     "password": "correct horse battery"
   }'
+```
+
+Update an existing preview in place:
+
+```sh
+curl -i http://localhost:8787/v1/html-previews/local-smoke-test \
+  -X PUT \
+  -H "Authorization: Bearer $LOCAL_PUBLISH_API_TOKEN" \
+  -H "X-Publish-Admin-Secret: $LOCAL_ADMIN_BYPASS_SECRET" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "title": "Local smoke test updated",
+    "html": "<!doctype html><html><body><h1>Updated</h1></body></html>"
+  }'
+```
+
+Rotate the viewer password separately:
+
+```sh
+curl -i http://localhost:8787/v1/html-previews/local-smoke-test/password \
+  -H "Authorization: Bearer $LOCAL_PUBLISH_API_TOKEN" \
+  -H "X-Publish-Admin-Secret: $LOCAL_ADMIN_BYPASS_SECRET" \
+  -H "Content-Type: application/json" \
+  --data '{"password":"new correct horse battery"}'
+```
+
+Hard-delete a preview and free its slug:
+
+```sh
+curl -i http://localhost:8787/v1/html-previews/local-smoke-test \
+  -X DELETE \
+  -H "Authorization: Bearer $LOCAL_PUBLISH_API_TOKEN" \
+  -H "X-Publish-Admin-Secret: $LOCAL_ADMIN_BYPASS_SECRET"
 ```
 
 ## Forking Guidance
@@ -534,10 +569,13 @@ npm run deploy
 After deploying:
 
 - Verify `${MCP_BASE_URL}/mcp` returns an OAuth challenge without a token.
-- Verify `tools/list` returns `publish_html_preview`.
+- Verify `tools/list` returns `deploy_html`, `update_html`, `update_html_password`, and `delete_html`.
 - Publish one preview with a user-bound token.
 - Open the returned preview URL.
 - Confirm the viewer password gate works.
+- Update the preview HTML and confirm the same URL changes content without rotating the password.
+- Rotate the viewer password and confirm old viewer cookies no longer work.
+- Delete the preview and confirm the slug can be reused.
 - Confirm uploaded HTML is sandboxed and cannot reach admin/API surfaces.
 
 You can automate the deployed MCP checks:
@@ -587,7 +625,7 @@ Rotate `PASSWORD_PEPPER` only when invalidating existing preview passwords is ac
 
 - The console (API origin root `/`) shows a Cloudflare 403 before Worker code runs: check whether a Cloudflare Access application is still protecting the API host.
 - MCP Worker dry-run does not list R2: expected. It should not have direct R2 access.
-- Publish through MCP fails with a machine token: expected. `publish_html_preview` needs a user-bound token with a verified email.
+- Mutating MCP tools fail with a machine token: expected. `deploy_html`, `update_html`, `update_html_password`, and `delete_html` need a user-bound token with a verified email.
 - Preview URL points at the API host: check `PUBLIC_BASE_URL`; preview links must use the preview origin.
 - Glean cannot discover tools: verify `${MCP_BASE_URL}/mcp`, OAuth metadata endpoints, callback allow-listing, and `MCP_OAUTH_CLIENT_SECRET`.
 - Codex or Claude login fails after callback: verify loopback host, port, and base callback path are present in `MCP_OAUTH_ALLOWED_REDIRECT_URIS`.

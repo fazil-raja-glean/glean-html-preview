@@ -28,13 +28,20 @@ These are the traps previous work on this repo actually hit.
 - `PASSWORD_PEPPER` rotation invalidates existing preview passwords.
 - Custom slugs are D1 row identity. Soft-deleted and expired previews still reserve their slugs; only hard delete frees
   the slug. New R2 object keys should stay under `previews/objects/{random-id}/...`, not under the public slug.
+- Publish paths require slugs. Agents should derive lower-kebab-case slugs from the artifact title or purpose; the
+  server should not silently generate or auto-suffix slugs.
+- `update_html` replaces the complete image attachment set. Omitted `images` means no attached images, not "preserve
+  whatever was there before."
 
 ## MCP And OAuth
 
 - Read live OAuth metadata or deploy output before configuring clients. Do not guess the MCP host URL from placeholders.
-- `client_credentials` tokens are only for setup, initialize, and tool discovery. Publishing requires a user-bound authorization-code token with a verified email.
+- `client_credentials` tokens are only for setup, initialize, and tool discovery. MCP deploy, update, password rotation,
+  and delete require a user-bound authorization-code token with a verified email.
 - Codex may append a path segment under the configured callback path. Allow-list the base loopback callback URL.
-- Glean MCP gateway exposure is separate from this repo defining `publish_html_preview`. Check live tool exposure before saying the tool is available through Glean.
+- Glean MCP gateway exposure is separate from this repo defining `deploy_html`, `update_html`,
+  `update_html_password`, and `delete_html`. Check live tool exposure before saying these tools are available through
+  Glean.
 - If an OAuth verifier script fails because of `require` plus top-level `await`, rerun it as an ES module.
 
 ## Runtime Limits

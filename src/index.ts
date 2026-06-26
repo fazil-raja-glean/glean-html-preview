@@ -6,6 +6,7 @@ import { handleOAuthRoute } from "./oauth-router";
 import { enforceConfiguredRouteOrigin, publicBaseUrl } from "./origin-policy";
 import {
   parsePublishCommand,
+  parsePreviewHtmlUpdateInput,
   parseRotatePasswordCommand,
   parseUnpublishCommand,
 } from "./publish-command";
@@ -19,9 +20,11 @@ import { handlePreviewAssetRequest, handlePreviewRequest } from "./preview-rende
 import {
   createPreview,
   getActivePreview,
-  getPreview,
+  getPreviewForPublisher,
+  hardDeletePreview,
   rotatePreviewPassword,
   softDeletePreview,
+  updatePreviewHtml,
 } from "./preview-store";
 import { routeForPath } from "./routes";
 import {
@@ -143,6 +146,16 @@ async function routeRequest(request: Request, env: Env): Promise<Response> {
       const principal = await requirePublishPrincipal(request, env, url);
       return publishPreview(request, env, url, principal);
     }
+    case "htmlPreview": {
+      const principal = await requirePublishPrincipal(request, env, url);
+      if (request.method === "PUT") {
+        return updatePreview(request, env, url, route.slug, principal);
+      }
+      if (request.method === "DELETE") {
+        return hardDeletePreviewForApi(request, env, route.slug, principal);
+      }
+      return methodNotAllowed();
+    }
     case "mcp": {
       if (request.method !== "POST") {
         return methodNotAllowed();
@@ -254,7 +267,7 @@ async function unpublishPreview(
   slug: string,
   principal: PublishPrincipal,
 ): Promise<Response> {
-  const existing = await getPreview(env, slug);
+  const existing = await getPreviewForPublisher(env, slug, principal.actorEmail);
   const input = parseUnpublishCommand(await readJsonObject(request));
   const deletedAt = await softDeletePreview(env, slug);
 
@@ -273,6 +286,32 @@ async function unpublishPreview(
   return jsonResponse({ slug, status: "unpublished", deletedAt });
 }
 
+async function updatePreview(
+  request: Request,
+  env: Env,
+  url: URL,
+  slug: string,
+  principal: PublishPrincipal,
+): Promise<Response> {
+  const input = parsePreviewHtmlUpdateInput(await readJsonObject(request), env);
+  const preview = await updatePreviewHtml(env, slug, principal.actorEmail, input);
+
+  await recordAudit(env, {
+    slug,
+    eventType: "html_updated",
+    actorEmail: principal.actorEmail,
+    request,
+    details: { sourceUrl: preview.source_url },
+  });
+
+  return jsonResponse({
+    url: `${publicBaseUrl(env, url, request)}/p/${preview.slug}`,
+    slug: preview.slug,
+    expiresAt: normalizeResponseExpiresAt(preview.expires_at),
+    status: "active",
+  });
+}
+
 async function rotatePassword(
   request: Request,
   env: Env,
@@ -280,6 +319,7 @@ async function rotatePassword(
   principal: PublishPrincipal,
 ): Promise<Response> {
   const input = parseRotatePasswordCommand(await readJsonObject(request));
+  await getPreviewForPublisher(env, slug, principal.actorEmail);
   await rotatePreviewPassword(env, slug, input.password);
 
   await recordAudit(env, {
@@ -291,6 +331,26 @@ async function rotatePassword(
   });
 
   return jsonResponse({ slug, status: "active" });
+}
+
+async function hardDeletePreviewForApi(
+  request: Request,
+  env: Env,
+  slug: string,
+  principal: PublishPrincipal,
+): Promise<Response> {
+  await getPreviewForPublisher(env, slug, principal.actorEmail);
+  await hardDeletePreview(env, slug);
+
+  await recordAudit(env, {
+    slug,
+    eventType: "hard_deleted",
+    actorEmail: principal.actorEmail,
+    request,
+    details: null,
+  });
+
+  return jsonResponse({ slug, status: "deleted" });
 }
 
 async function handleAccessRequest(request: Request, env: Env, slug: string): Promise<Response> {
@@ -541,4 +601,8 @@ function parseTimestamp(value: string | null | undefined): number | null {
 
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function normalizeResponseExpiresAt(value: string): string | null {
+  return value.trim() === "" ? null : value;
 }
