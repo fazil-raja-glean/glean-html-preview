@@ -47,6 +47,8 @@ runtime libraries and presentation assets: `cdn.jsdelivr.net`, `unpkg.com`, `cdn
 `cdn.tailwindcss.com`, `cdn.plot.ly`, `d3js.org`, `cdn.sheetjs.com`, `ajax.googleapis.com`,
 `fonts.googleapis.com`, and `fonts.gstatic.com`. The preview still runs without `allow-same-origin`, runtime
 `connect-src` network access, forms, frames, workers, or top navigation.
+Image loading is also limited to the preview origin, embedded `data:`/`blob:` URLs, and `https://*.glean.com`
+so pasted Glean document image links can render without opening broader network access.
 
 ### Glean
 

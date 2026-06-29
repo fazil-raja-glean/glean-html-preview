@@ -323,7 +323,9 @@ describe("admin UI and API", () => {
     const assetUrl = html.match(/\/p\/[A-Za-z0-9_-]+\/assets\/[A-Za-z0-9_-]+\?token=[^"]+/)?.[0];
     const assetPath = assetUrl?.split("?")[0];
     expect(preview.status).toBe(200);
-    expect(preview.headers.get("Content-Security-Policy")).toContain("img-src https://preview.example.test data: blob:");
+    expect(preview.headers.get("Content-Security-Policy")).toContain(
+      "img-src https://preview.example.test https://*.glean.com data: blob:",
+    );
     expect(assetUrl).toContain("?token=");
     expect(assetPath).toBeTruthy();
     expect(html).not.toContain("cid:proof.png");

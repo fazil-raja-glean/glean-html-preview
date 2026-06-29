@@ -103,11 +103,12 @@ describe("preview HTML security headers", () => {
     expect(csp).toContain("object-src 'none'");
     expect(csp).toContain("worker-src 'none'");
     expect(csp).toContain("navigate-to 'none'");
-    expect(csp).toContain("img-src https://preview.example.test data: blob:");
+    expect(csp).toContain("img-src https://preview.example.test https://*.glean.com data: blob:");
     expect(csp).not.toContain("img-src https: data:");
     expect(csp).not.toContain("script-src 'none'");
     expect(csp).not.toContain("connect-src https:");
     expect(csp).not.toContain("script-src https:");
+    expect(csp).not.toContain("script-src https://*.glean.com");
     expect(csp).not.toContain("script-src-elem https:");
   });
 });

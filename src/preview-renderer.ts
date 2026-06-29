@@ -54,6 +54,10 @@ const GLEAN_GENERATED_HTML_FONT_SOURCES = [
   "https://cdnjs.cloudflare.com",
 ];
 
+const GLEAN_GENERATED_HTML_IMAGE_SOURCES = [
+  "https://*.glean.com",
+];
+
 export async function handlePreviewRequest(
   request: Request,
   env: PreviewRenderEnv,
@@ -120,8 +124,9 @@ function previewContentSecurityPolicy(previewOriginValue: string): string {
   const scriptSources = ["'unsafe-inline'", ...GLEAN_GENERATED_HTML_SCRIPT_SOURCES].join(" ");
   const styleSources = ["'unsafe-inline'", ...GLEAN_GENERATED_HTML_STYLE_SOURCES].join(" ");
   const fontSources = ["data:", ...GLEAN_GENERATED_HTML_FONT_SOURCES].join(" ");
+  const imageSources = [previewOriginValue, ...GLEAN_GENERATED_HTML_IMAGE_SOURCES, "data:", "blob:"].join(" ");
 
-  return `sandbox allow-scripts; default-src 'none'; script-src ${scriptSources}; script-src-attr 'none'; style-src ${styleSources}; img-src ${previewOriginValue} data: blob:; media-src data: blob:; font-src ${fontSources}; connect-src 'none'; form-action 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; frame-ancestors 'none'; navigate-to 'none'`;
+  return `sandbox allow-scripts; default-src 'none'; script-src ${scriptSources}; script-src-attr 'none'; style-src ${styleSources}; img-src ${imageSources}; media-src data: blob:; font-src ${fontSources}; connect-src 'none'; form-action 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; frame-ancestors 'none'; navigate-to 'none'`;
 }
 
 function previewOrigin(request: Request, env: PreviewRenderEnv): string {
